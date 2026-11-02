@@ -597,8 +597,7 @@ function NetworkLevelOverview() {
                               {formatMetricDelta(
                                 b.collectionEfficiency - avgCollectionEfficiency,
                                 "percent",
-                              )}{" "}
-                              pts
+                              )}
                             </Status>
                           )}
                         </div>
@@ -830,7 +829,7 @@ function SelectedBranchOverview({ branch }: { branch: BranchSummary }) {
                       isAhead ? "text-success" : "text-destructive"
                     }`}
                   >
-                    {formatMetricDelta(collectionGap, "percent")} pts
+                    {formatMetricDelta(collectionGap, "percent")}
                   </p>
                 </div>
               </div>
@@ -857,7 +856,7 @@ function SelectedBranchOverview({ branch }: { branch: BranchSummary }) {
                   : `First contact delay and broken promise backlog are driving the ${formatMetricDelta(
                       collectionGap,
                       "percent",
-                    )} pt deficit.`}
+                    )} deficit.`}
               </p>
               <div className="mt-3.5 flex items-center justify-between border-t pt-3">
                 <span className="text-[11px] font-semibold text-muted-foreground">
@@ -889,7 +888,7 @@ function SelectedBranchOverview({ branch }: { branch: BranchSummary }) {
                   isAhead ? "font-semibold text-success" : "font-semibold text-destructive"
                 }
               >
-                {formatMetricDelta(collectionGap, "percent")} pts
+                {formatMetricDelta(collectionGap, "percent")}
               </span>
               <span>vs peer ({formatDisplayValue(networkCollectionEfficiency, "percent")})</span>
             </div>
@@ -947,8 +946,7 @@ function SelectedBranchOverview({ branch }: { branch: BranchSummary }) {
                   {formatMetricDelta(
                     ptpKeptRate - (networkAveragePercent(networkAverages, "ptp_kept_rate") ?? 0),
                     "percent",
-                  )}{" "}
-                  pts
+                  )}
                 </span>
               )}
               <span>
@@ -986,8 +984,7 @@ function SelectedBranchOverview({ branch }: { branch: BranchSummary }) {
                   {formatMetricDelta(
                     contactRate - (networkAveragePercent(networkAverages, "contact_rate") ?? 0),
                     "percent",
-                  )}{" "}
-                  pts
+                  )}
                 </span>
               )}
               <span>
