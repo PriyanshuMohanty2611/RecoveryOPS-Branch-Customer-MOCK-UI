@@ -81,7 +81,7 @@ export function AppShell({
   const handleRefresh = async () => {
     if (isRefreshing) return;
     setIsRefreshing(true);
-    const toastId = toast.loading("Syncing dashboard with PostgreSQL database...");
+    const toastId = toast.loading("Syncing dashboard with database...");
 
     try {
       // 1. Call backend to ensure calculations are freshly synced from source tables
@@ -102,8 +102,8 @@ export function AppShell({
 
       toast.success("Dashboard Refreshed", {
         id: toastId,
-        description: `Successfully loaded latest records from database (${result.batchesSynced} periods reconciled).`,
-        duration: 3500,
+        description: "Successfully loaded data from database",
+        duration: 3000,
       });
     } catch (err) {
       console.error("Dashboard refresh error:", err);
@@ -396,7 +396,7 @@ export function AppShell({
                 onClick={handleRefresh}
                 disabled={isRefreshing}
                 className="group flex items-center gap-2 rounded-full border border-border/80 bg-card/80 px-3.5 py-1.5 text-xs font-semibold text-foreground shadow-xs transition-all hover:border-primary/50 hover:bg-accent/80 hover:shadow-sm active:scale-[0.98] disabled:opacity-75 cursor-pointer select-none"
-                title="Click to refresh dashboard data directly from the PostgreSQL database"
+                title="Click to refresh dashboard data directly from the database"
                 aria-label="Refresh dashboard data from database"
               >
                 <RefreshCw
