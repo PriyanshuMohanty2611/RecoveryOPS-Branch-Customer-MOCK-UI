@@ -25,6 +25,12 @@ import { useDate } from "@/hooks/date-context";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { api, formatMetricValue, getMetric, type BranchSummary } from "@/lib/api";
+import {
+  BRANCH_METADATA,
+  CUSTOMERS,
+  getStoredCustomerBranch,
+  setStoredCustomerBranch,
+} from "@/data/customer-nba-data";
 
 function formatCurrentDateTime(d: Date = new Date()): string {
   const dateStr = d.toLocaleDateString("en-US", {
@@ -57,6 +63,9 @@ export function AppShell({
   const [desktopSidebarOpen, setDesktopSidebarOpen] = useState(true);
   const [scrollProgress, setScrollProgress] = useState(0);
   const pathname = useRouterState({ select: (s) => s.location.pathname });
+  const searchParams = useRouterState({
+    select: (s) => (s.location.search as Record<string, string | undefined>),
+  });
   const { selectedBranch, selectBranch, clearBranch, hasBranch } = useBranch();
   const { selectedDate } = useDate();
   const branchesQuery = useQuery({
@@ -65,6 +74,23 @@ export function AppShell({
   });
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+
+  // Active customer branch resolution
+  const urlBranch = searchParams?.["branch"];
+  const storedCustomerBranch = typeof window !== "undefined" ? getStoredCustomerBranch() : null;
+  let activeCustomerBranchCode = urlBranch || storedCustomerBranch;
+  if (!activeCustomerBranchCode && pathname.startsWith("/customers/")) {
+    const custId = pathname.split("/customers/")[1];
+    const foundCust = CUSTOMERS.find((c) => c.id === custId);
+    if (foundCust) activeCustomerBranchCode = foundCust.br;
+  }
+  const activeCustomerBranch =
+    activeCustomerBranchCode && BRANCH_METADATA[activeCustomerBranchCode]
+      ? {
+          code: activeCustomerBranchCode,
+          name: BRANCH_METADATA[activeCustomerBranchCode]!.name,
+        }
+      : null;
 
   // On-demand dashboard refresh state
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -316,21 +342,46 @@ export function AppShell({
                   }`}
                   onClick={() => setOpen(false)}
                 >
-                  <LayoutDashboard className="size-4" />
-                  <span>Overview</span>
+                  <Building2 className="size-4" />
+                  <span>Customer Insights</span>
                 </Link>
-                <Link
-                  to="/worklist"
-                  className={`flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition ${
-                    pathname === "/worklist" || pathname.startsWith("/customers/")
-                      ? "bg-primary/10 text-primary ring-1 ring-primary/15 font-semibold"
-                      : "text-muted-foreground hover:bg-card/70 hover:text-foreground"
-                  }`}
-                  onClick={() => setOpen(false)}
-                >
-                  <ListChecks className="size-4" />
-                  <span>Priority Worklist</span>
-                </Link>
+
+                {/* Sub-views under Active Customer Branch (matching Image 2) */}
+                {activeCustomerBranch && (pathname === "/worklist" || pathname.startsWith("/customers/")) ? (
+                  <div className="mt-2.5 space-y-1 rounded-xl border border-primary/20 bg-primary/5 p-2">
+                    <div className="flex items-center justify-between px-2 py-1 text-[11px] font-bold text-primary">
+                      <div className="flex items-center gap-1.5 truncate">
+                        <Building2 className="size-3.5 shrink-0" />
+                        <span className="truncate">{activeCustomerBranch.name}</span>
+                      </div>
+                      <button
+                        onClick={() => {
+                          setStoredCustomerBranch(null);
+                          navigate({ to: "/customer-analytics" });
+                        }}
+                        title="Back to Customer Insights"
+                        className="rounded p-1 text-primary/70 hover:bg-primary/20 hover:text-primary transition cursor-pointer"
+                      >
+                        <X className="size-3" />
+                      </button>
+                    </div>
+                    <div className="space-y-0.5 pt-1 border-t border-primary/10">
+                      <Link
+                        to="/worklist"
+                        search={{ branch: activeCustomerBranch.code }}
+                        className={`flex items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-xs font-medium transition ${
+                          pathname === "/worklist" || pathname.startsWith("/customers/")
+                            ? "bg-primary text-primary-foreground font-semibold shadow-xs"
+                            : "text-muted-foreground hover:bg-primary/10 hover:text-foreground"
+                        }`}
+                        onClick={() => setOpen(false)}
+                      >
+                        <ListChecks className="size-3.5" />
+                        <span>Priority Worklist</span>
+                      </Link>
+                    </div>
+                  </div>
+                ) : null}
               </div>
             </div>
           </nav>

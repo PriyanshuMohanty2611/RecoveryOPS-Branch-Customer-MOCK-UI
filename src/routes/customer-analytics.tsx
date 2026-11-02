@@ -1,155 +1,274 @@
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { ArrowRight, Building2, MapPin } from "lucide-react";
-import { useQuery } from "@tanstack/react-query";
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
+import { useMemo } from "react";
 import { AppShell } from "@/components/app-shell";
-import { useBranch, type Branch } from "@/hooks/branch-context";
-import { useDate } from "@/hooks/date-context";
-import { api, formatMetricValue, getMetric, type BranchSummary } from "@/lib/api";
+import {
+  Building2,
+  Users,
+  ArrowRight,
+  ListChecks,
+} from "lucide-react";
+import { AnimatedKpi } from "@/components/ui/animated-kpi";
+import { useScrollInView } from "@/hooks/use-scroll-in-view";
+import {
+  CUSTOMERS,
+  BRANCH_METADATA,
+  ALL_BRANCH_CODES,
+  setStoredCustomerBranch,
+  type CustomerData,
+} from "@/data/customer-nba-data";
 
 export const Route = createFileRoute("/customer-analytics")({
   head: () => ({
     meta: [
-      { title: "Branch Directory — Customer Level — RecoveryOps" },
+      { title: "Customer Insights — RecoveryOps" },
       {
         name: "description",
-        content: "Select a branch to view customer portfolios and priority worklists.",
+        content: "Branch-level customer delinquency queues, next best actions, and priority worklists.",
       },
-      { property: "og:title", content: "Branch Directory — Customer Level — RecoveryOps" },
-      {
-        property: "og:description",
-        content: "Select a branch to view customer portfolios and priority worklists.",
-      },
-      { property: "og:type", content: "website" },
-      { name: "twitter:card", content: "summary_large_image" },
     ],
   }),
-  component: CustomerAnalytics,
+  component: CustomerBranchOverview,
 });
 
-function estimatedAccounts(b: BranchSummary): number {
-  // dpd_30_plus_concentration is seeded with denominator = total active accounts
-  const dpd = getMetric(b.metrics, "dpd_30_plus_concentration");
-  return dpd?.denominator ?? 0;
+interface BranchAggregate {
+  code: string;
+  meta: (typeof BRANCH_METADATA)[string];
+  customers: CustomerData[];
+  totalExp: number;
+  avgCov: number;
+  reachedCount: number;
+  outreachPct: number;
+  recoveredAmt: number;
+  attainmentPct: number;
 }
 
-function CustomerAnalytics() {
-  const { selectedBranch, selectBranch } = useBranch();
-  const navigate = useNavigate();
-  const { selectedDate } = useDate();
-  const branchesQuery = useQuery({
-    queryKey: ["branches", selectedDate],
-    queryFn: () => api.getBranches(selectedDate),
-  });
-  const branches = branchesQuery.data?.data ?? [];
-  const totalAccounts = branches.reduce((sum, b) => sum + estimatedAccounts(b), 0);
-
-  const handleBranchClick = (branch: Branch) => {
-    selectBranch(branch);
-    navigate({ to: "/worklist" });
-  };
+function BranchCard({
+  b,
+  onSelect,
+  index = 0,
+}: {
+  b: BranchAggregate;
+  onSelect: () => void;
+  index?: number;
+}) {
+  const { ref, isInView } = useScrollInView({ threshold: 0.1, triggerOnce: false });
 
   return (
-    <AppShell
-      title="Customer Intelligence — Branch Network"
-      section="Customer Level"
-      subtitle="Select a branch portfolio to view customer accounts and open priority worklist"
+    <div
+      ref={ref as any}
+      onClick={onSelect}
+      className={`cursor-pointer group relative overflow-hidden rounded-2xl border border-border/80 bg-card hover:bg-card/95 hover:shadow-md transition-all duration-500 p-6 flex flex-col justify-between h-full ${b.meta.borderGlow} ${
+        isInView ? "opacity-100 translate-y-0" : "opacity-0 translate-y-3"
+      }`}
+      style={{ transitionDelay: `${index * 80}ms` }}
     >
-      <div className="mx-auto max-w-[1280px] space-y-5">
-        {/* Network Header Summary Banner */}
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 rounded-2xl border border-border/60 bg-card/40 p-4 backdrop-blur-md">
-          <div className="flex items-center gap-3">
-            <div className="flex size-10 items-center justify-center rounded-xl bg-primary/10 text-primary">
-              <Building2 className="size-5" />
+      {/* Top Accent Strip */}
+      <div
+        className={`absolute top-0 left-0 right-0 h-1.5 bg-gradient-to-r ${b.meta.gradient} transition-all duration-300 group-hover:h-2`}
+      />
+
+      <div className="space-y-4">
+        {/* Card Header Row: Branch Code + Region + Active Queue */}
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <span className="font-mono text-xs font-black px-2.5 py-0.5 rounded-lg bg-foreground text-background">
+              BR-{b.code}
+            </span>
+            <span
+              className={`text-[11px] font-bold px-2.5 py-0.5 rounded-full border ${b.meta.badgeBg}`}
+            >
+              {b.meta.region}
+            </span>
+          </div>
+
+          <span className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-extrabold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
+            <span className="size-1.5 rounded-full bg-emerald-500 animate-pulse" />
+            Active Queue
+          </span>
+        </div>
+
+        {/* Branch Name & Lead */}
+        <div>
+          <h3 className="text-lg font-black text-foreground group-hover:text-primary transition tracking-tight">
+            {b.meta.name}
+          </h3>
+          <p className="text-xs text-muted-foreground mt-0.5 flex items-center gap-1.5">
+            <Users className="size-3.5 text-muted-foreground/70" />
+            Branch Lead: <span className="font-semibold text-foreground">{b.meta.manager}</span>
+          </p>
+        </div>
+
+        {/* 2 CLEAN DPD METRIC CARDS WITH ANIMATED COUNT-UP */}
+        <div className="grid grid-cols-2 gap-3 pt-2">
+          <div className="rounded-xl border border-border/80 bg-muted/40 p-4 flex flex-col justify-between">
+            <div className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+              DPD Amount
             </div>
-            <div>
-              <h2 className="text-sm font-bold text-display">Active Regional Branch Portfolios</h2>
-              <p className="text-xs text-muted-foreground">
-                {branches.length} operational branches • {totalAccounts.toLocaleString()} total
-                customer accounts
-              </p>
+            <div className="text-xl font-black text-foreground mt-1.5 tracking-tight">
+              <AnimatedKpi value={b.totalExp} prefix="$" />
+            </div>
+            <div className="text-[10.5px] font-medium text-muted-foreground mt-1.5">
+              Active Delinquency
             </div>
           </div>
-          <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
-            <span className="inline-block size-2 rounded-full bg-emerald-500 animate-pulse" />
-            <span>Select any branch from the list to launch its customer worklist</span>
+
+          <div className="rounded-xl border border-border/80 bg-muted/40 p-4 flex flex-col justify-between">
+            <div className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+              DPD Accounts
+            </div>
+            <div className="text-xl font-black text-foreground mt-1.5 tracking-tight">
+              <AnimatedKpi value={b.customers.length} suffix=" Accounts" />
+            </div>
+            <div className="text-[10.5px] font-semibold text-emerald-600 dark:text-emerald-400 mt-1.5">
+              Priority Worklist
+            </div>
           </div>
         </div>
 
-        {branchesQuery.isLoading && (
-          <p className="text-sm text-muted-foreground">Loading branches…</p>
-        )}
-
-        <div className="space-y-2.5">
-          {branches.map((branch) => {
-            const isSelected = selectedBranch?.id === branch.id;
-            const delinquency = getMetric(branch.metrics, "delinquency_rate_30_plus")?.value ?? 0;
-            const isTopPerformer = delinquency <= 0.1;
-            const isAtRisk = delinquency >= 0.14;
-
-            return (
-              <div
-                key={branch.id}
-                role="button"
-                tabIndex={0}
-                onClick={() => handleBranchClick(branch)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" || e.key === " ") {
-                    e.preventDefault();
-                    handleBranchClick(branch);
-                  }
-                }}
-                className={`group flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 rounded-xl border p-4 transition-all duration-200 cursor-pointer shadow-xs hover:shadow-md hover:-translate-y-0.5 ${
-                  isSelected
-                    ? "border-primary bg-primary/5 ring-2 ring-primary/20"
-                    : "border-border/60 bg-card/60 hover:border-primary/40 hover:bg-card"
-                }`}
-              >
-                {/* Branch Info */}
-                <div className="flex items-center gap-3.5">
-                  <div className="flex size-11 items-center justify-center rounded-xl bg-primary/10 text-primary group-hover:bg-primary group-hover:text-primary-foreground transition-colors duration-200 shrink-0">
-                    <Building2 className="size-5" />
-                  </div>
-                  <div>
-                    <div className="flex items-center gap-2.5">
-                      <h3 className="font-bold text-display text-base text-foreground group-hover:text-primary transition-colors">
-                        {branch.name}
-                      </h3>
-                      <span
-                        className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-[10px] font-bold ${
-                          isTopPerformer
-                            ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20"
-                            : isAtRisk
-                              ? "bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20"
-                              : "bg-primary/10 text-primary border border-primary/20"
-                        }`}
-                      >
-                        {isTopPerformer ? "Top Tier" : isAtRisk ? "At Risk" : "Stable"}
-                      </span>
-                    </div>
-                    <div className="flex items-center gap-2 text-xs text-muted-foreground mt-0.5">
-                      <div className="flex items-center gap-1">
-                        <MapPin className="size-3 text-muted-foreground/80" />
-                        <span>{branch.region}</span>
-                      </div>
-                      <span>•</span>
-                      <span>
-                        30+ DPD{" "}
-                        {formatMetricValue(getMetric(branch.metrics, "delinquency_rate_30_plus"))}
-                      </span>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Right Action */}
-                <div className="flex items-center justify-end gap-3 shrink-0">
-                  <div className="inline-flex items-center gap-2 rounded-lg bg-primary/10 px-3.5 py-1.5 text-xs font-semibold text-primary group-hover:bg-primary group-hover:text-primary-foreground transition-all duration-200">
-                    <span>Open Worklist</span>
-                    <ArrowRight className="size-3.5 transition-transform duration-200 group-hover:translate-x-1" />
-                  </div>
-                </div>
+        {/* RECOVERY ATTAINMENT BAR UNDER THE 2 DPD METRIC CARDS */}
+        <div className="rounded-xl border border-border/80 bg-muted/30 p-3.5 space-y-2.5">
+          <div className="flex items-center justify-between text-xs">
+            <div>
+              <div className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+                Recovery Attainment
               </div>
-            );
-          })}
+              <div className="text-sm font-black text-foreground mt-0.5">
+                <AnimatedKpi value={b.recoveredAmt} prefix="$" />{" "}
+                <span className="text-[11px] font-medium text-muted-foreground">recovered</span>
+              </div>
+            </div>
+            <div className="text-right">
+              <span className="inline-flex items-center rounded-md bg-emerald-500/10 px-2 py-0.5 text-xs font-black text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
+                {b.attainmentPct}% Attained
+              </span>
+            </div>
+          </div>
+
+          {/* Attainment Fill Bar with Smooth Growth Animation */}
+          <div className="h-2 w-full rounded-full bg-muted overflow-hidden">
+            <div
+              className="h-full rounded-full bg-gradient-to-r from-emerald-500 to-primary transition-all duration-1000 ease-out"
+              style={{ width: isInView ? `${Math.min(100, Math.max(0, b.attainmentPct))}%` : "0%" }}
+            />
+          </div>
+        </div>
+      </div>
+
+      {/* Card Action Footer Button */}
+      <div className="mt-5 pt-3.5 border-t border-border/60">
+        <div className="w-full flex items-center justify-between rounded-xl bg-primary/10 group-hover:bg-primary group-hover:text-primary-foreground px-4 py-2.5 text-xs font-bold text-primary transition shadow-2xs">
+          <span>Open Priority Worklist</span>
+          <ArrowRight className="size-3.5 transition group-hover:translate-x-0.5" />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CustomerBranchOverview() {
+  const navigate = useNavigate();
+  const customers = CUSTOMERS;
+
+  // Aggregate stats per branch
+  const branchAggregates: BranchAggregate[] = useMemo(() => {
+    return ALL_BRANCH_CODES.map((code) => {
+      const meta = BRANCH_METADATA[code] || {
+        name: `Branch ${code}`,
+        region: "General Division",
+        manager: "Assigned Officer",
+        gradient: "from-primary to-primary/80",
+        badgeBg: "bg-primary/10 text-primary border-primary/20",
+        borderGlow: "hover:border-primary",
+        accentColor: "#6366f1",
+      };
+
+      const bCustomers = customers.filter((c) => c.br === code);
+      const totalExp = bCustomers.reduce((sum, c) => sum + c.exp, 0);
+      const avgCov = bCustomers.length
+        ? Math.round(bCustomers.reduce((sum, c) => sum + c.cov, 0) / bCustomers.length)
+        : 0;
+
+      // Agent outreach: how many customers reached and done
+      const reachedCount = bCustomers.filter((c) => c.touches > 0).length;
+      const outreachPct = bCustomers.length
+        ? Math.round((reachedCount / bCustomers.length) * 100)
+        : 0;
+
+      // Recovered amount and attainment %
+      const recoveredAmt = bCustomers.reduce(
+        (sum, c) => sum + Math.round((c.exp * c.cov) / 100),
+        0
+      );
+      const attainmentPct = totalExp > 0 ? Math.round((recoveredAmt / totalExp) * 100) : 0;
+
+      return {
+        code,
+        meta,
+        customers: bCustomers,
+        totalExp,
+        avgCov,
+        reachedCount,
+        outreachPct,
+        recoveredAmt,
+        attainmentPct,
+      };
+    });
+  }, [customers]);
+
+  return (
+    <AppShell
+      title="Customer Insights"
+      section="Customer Level"
+      subtitle="Delinquency Insights & Branch Queues"
+      actions={
+        <div className="flex items-center gap-3">
+          <Link
+            to="/worklist"
+            className="inline-flex items-center gap-1.5 rounded-xl bg-primary px-3.5 py-1.5 text-xs font-bold text-primary-foreground hover:bg-primary/90 transition shadow-xs"
+          >
+            <ListChecks className="size-3.5" /> Full Priority Worklist
+          </Link>
+        </div>
+      }
+    >
+      <div className="mx-auto max-w-[1340px] space-y-6">
+        {/* CLEAN HEADER BAR */}
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 p-5 rounded-2xl border border-border/80 bg-card shadow-xs">
+          <div className="space-y-1">
+            <div className="flex items-center gap-2">
+              <span className="inline-flex items-center gap-1.5 rounded-full bg-primary/10 px-2.5 py-0.5 text-xs font-bold text-primary border border-primary/20">
+                <Building2 className="size-3.5" /> 6 Recovery Hubs
+              </span>
+            </div>
+            <h2 className="text-xl sm:text-2xl font-black tracking-tight text-foreground">
+              Select Branch Priority Worklist
+            </h2>
+            <p className="text-xs sm:text-sm text-muted-foreground">
+              Click any branch to inspect delinquent borrowers, active outreach cadences, and predictive recovery models.
+            </p>
+          </div>
+
+          <Link
+            to="/worklist"
+            className="inline-flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2 text-xs font-bold text-primary-foreground hover:bg-primary/90 transition shadow-xs shrink-0 self-start sm:self-center"
+          >
+            <ListChecks className="size-3.5" /> Open Full Worklist <ArrowRight className="size-3.5 ml-0.5" />
+          </Link>
+        </div>
+
+        {/* 6 BRANCHES BALANCED & FILLED GRID */}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+          {branchAggregates.map((b, idx) => (
+            <BranchCard
+              key={b.code}
+              b={b}
+              index={idx}
+              onSelect={() => {
+                setStoredCustomerBranch(b.code);
+                navigate({ to: "/worklist", search: { branch: b.code } });
+              }}
+            />
+          ))}
         </div>
       </div>
     </AppShell>
