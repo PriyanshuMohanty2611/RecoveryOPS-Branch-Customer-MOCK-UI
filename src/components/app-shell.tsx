@@ -141,6 +141,7 @@ export function AppShell({
     } finally {
       setIsRefreshing(false);
     }
+  };
 
 
   // Dynamic Blue Scroll Progress Line tracking viewport depth
