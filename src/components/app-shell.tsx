@@ -11,6 +11,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   PieChart,
+  RefreshCw,
   Search,
   Settings,
   Sparkles,
@@ -21,8 +22,23 @@ import { useState, useEffect, type ReactNode } from "react";
 import { Button } from "./ui";
 import { useBranch } from "@/hooks/branch-context";
 import { useDate } from "@/hooks/date-context";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
 import { api, formatMetricValue, getMetric, type BranchSummary } from "@/lib/api";
+
+function formatCurrentDateTime(d: Date = new Date()): string {
+  const dateStr = d.toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+  const timeStr = d.toLocaleTimeString("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  }).toLowerCase();
+  return `${dateStr} · ${timeStr}`;
+}
 
 export function AppShell({
   children,
@@ -48,6 +64,59 @@ export function AppShell({
     queryFn: () => api.getBranches(selectedDate),
   });
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
+
+  // On-demand dashboard refresh state
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [lastRefreshedText, setLastRefreshedText] = useState<string>(() => {
+    try {
+      const stored = localStorage.getItem("recoveryops-last-refreshed");
+      if (stored && !stored.includes("Oct 1, 2026")) return stored;
+    } catch {
+      /* ignore */
+    }
+    return formatCurrentDateTime();
+  });
+
+  const handleRefresh = async () => {
+    if (isRefreshing) return;
+    setIsRefreshing(true);
+    const toastId = toast.loading("Syncing dashboard with PostgreSQL database...");
+
+    try {
+      // 1. Call backend to ensure calculations are freshly synced from source tables
+      const result = await api.syncRefresh();
+
+      // 2. Invalidate and re-fetch all active TanStack queries
+      await queryClient.invalidateQueries();
+
+      // 3. Update the displayed refresh timestamp to the current date and time
+      const now = new Date();
+      const displayStr = formatCurrentDateTime(now);
+      setLastRefreshedText(displayStr);
+      try {
+        localStorage.setItem("recoveryops-last-refreshed", displayStr);
+      } catch {
+        /* ignore */
+      }
+
+      toast.success("Dashboard Refreshed", {
+        id: toastId,
+        description: `Successfully loaded latest records from database (${result.batchesSynced} periods reconciled).`,
+        duration: 3500,
+      });
+    } catch (err) {
+      console.error("Dashboard refresh error:", err);
+      // Ensure UI is still refreshed even if backend sync had transient issue
+      await queryClient.invalidateQueries().catch(() => {});
+      toast.error("Dashboard refresh issue", {
+        id: toastId,
+        description: err instanceof Error ? err.message : "Failed to sync latest database records.",
+      });
+    } finally {
+      setIsRefreshing(false);
+    }
+  };
 
   // Dynamic Blue Scroll Progress Line tracking viewport depth
   useEffect(() => {
@@ -321,12 +390,31 @@ export function AppShell({
             <div className="ml-auto flex items-center gap-2">
               {actions}
 
-              {/* Point-in-time Business Date Snapshot */}
-              <div className="flex items-center gap-1.5 rounded-full border border-border/80 bg-card/70 px-3.5 py-1.5 text-xs font-semibold text-foreground shadow-xs">
-                <Calendar className="size-3.5 text-primary" />
+              {/* Point-in-time Business Date Snapshot & On-Demand Refresh */}
+              <button
+                type="button"
+                onClick={handleRefresh}
+                disabled={isRefreshing}
+                className="group flex items-center gap-2 rounded-full border border-border/80 bg-card/80 px-3.5 py-1.5 text-xs font-semibold text-foreground shadow-xs transition-all hover:border-primary/50 hover:bg-accent/80 hover:shadow-sm active:scale-[0.98] disabled:opacity-75 cursor-pointer select-none"
+                title="Click to refresh dashboard data directly from the PostgreSQL database"
+                aria-label="Refresh dashboard data from database"
+              >
+                <RefreshCw
+                  className={`size-3.5 text-primary transition-transform duration-700 ${
+                    isRefreshing ? "animate-spin" : "group-hover:rotate-180"
+                  }`}
+                />
                 <span className="text-muted-foreground font-medium">Refreshed:</span>
-                <span>Oct 1, 2026</span>
-              </div>
+                <span className="font-semibold text-foreground">
+                  {isRefreshing ? "Refreshing..." : lastRefreshedText}
+                </span>
+                <span
+                  className={`size-1.5 rounded-full transition-colors ${
+                    isRefreshing ? "bg-amber-500 animate-pulse" : "bg-emerald-500"
+                  }`}
+                  title={isRefreshing ? "Syncing..." : "Database live and connected"}
+                />
+              </button>
 
               <Button variant="secondary" className="size-9 px-0" aria-label="Search">
                 <Search className="size-4" />

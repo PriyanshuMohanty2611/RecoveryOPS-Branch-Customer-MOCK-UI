@@ -69,9 +69,20 @@ export const api = {
     fetchJson<BranchOverviewResponse>(
       `/branches/${branchId}/overview${buildQuery({ as_of_date: asOfDate })}`,
     ),
-  getBranchPerformance: (branchId: number, asOfDate?: string, fromDate?: string, toDate?: string) =>
+  getBranchPerformance: (
+    branchId: number,
+    asOfDate?: string,
+    fromDate?: string,
+    toDate?: string,
+    months?: number,
+  ) =>
     fetchJson<BranchPerformanceResponse>(
-      `/branches/${branchId}/performance${buildQuery({ as_of_date: asOfDate, from_date: fromDate, to_date: toDate })}`,
+      `/branches/${branchId}/performance${buildQuery({
+        as_of_date: asOfDate,
+        from_date: fromDate,
+        to_date: toDate,
+        months: months ? String(months) : undefined,
+      })}`,
     ),
   getBranchPeers: (branchId: number, asOfDate?: string) =>
     fetchJson<BranchPeersResponse>(
@@ -97,6 +108,29 @@ export const api = {
     fetchJson<OverallBranchAIResponse>(
       `/branches/${branchId}/ai-insights/overall${buildQuery({ as_of_date: asOfDate })}`,
     ),
+  syncRefresh: async () => {
+    const res = await fetch(`${API_BASE}/refresh`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", accept: "application/json" },
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => "Unknown error");
+      throw new Error(`Refresh failed: ${res.status} ${text}`);
+    }
+    return res.json() as Promise<{
+      status: string;
+      message: string;
+      refreshedAt: string;
+      asOfDate: string;
+      batchesSynced: number;
+    }>;
+  },
+  getRefreshStatus: () =>
+    fetchJson<{
+      status: string;
+      lastRefreshedAt: string | null;
+      asOfDate: string;
+    }>("/refresh"),
 };
 
 export function formatMetricValue(m: MetricValue | undefined): string {

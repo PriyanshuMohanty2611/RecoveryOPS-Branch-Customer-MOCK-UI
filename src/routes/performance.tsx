@@ -220,12 +220,64 @@ function comparisonTone(
   return improved ? "success" : "danger";
 }
 
+const MONTH_THEMES: Record<
+  string,
+  {
+    bg: string;
+    border: string;
+    text: string;
+    dot: string;
+  }
+> = {
+  "2026-06-30": {
+    bg: "bg-slate-300 dark:bg-slate-700",
+    border: "border-slate-400/60",
+    text: "text-slate-600 dark:text-slate-300",
+    dot: "bg-slate-400",
+  },
+  "2026-07-31": {
+    bg: "bg-sky-400 dark:bg-sky-600",
+    border: "border-sky-500/60",
+    text: "text-sky-600 dark:text-sky-300",
+    dot: "bg-sky-400",
+  },
+  "2026-08-31": {
+    bg: "bg-indigo-400 dark:bg-indigo-600",
+    border: "border-indigo-500/60",
+    text: "text-indigo-600 dark:text-indigo-300",
+    dot: "bg-indigo-400",
+  },
+  "2026-09-30": {
+    bg: "bg-primary",
+    border: "border-primary",
+    text: "text-primary",
+    dot: "bg-primary",
+  },
+};
+
+function getMonthTheme(end: string, idx: number) {
+  if (MONTH_THEMES[end]) return MONTH_THEMES[end];
+  const defaults = [
+    { bg: "bg-slate-300 dark:bg-slate-700", border: "border-slate-400/60", text: "text-slate-600", dot: "bg-slate-400" },
+    { bg: "bg-sky-400 dark:bg-sky-600", border: "border-sky-500/60", text: "text-sky-600", dot: "bg-sky-400" },
+    { bg: "bg-indigo-400 dark:bg-indigo-600", border: "border-indigo-500/60", text: "text-indigo-600", dot: "bg-indigo-400" },
+    { bg: "bg-primary", border: "border-primary", text: "text-primary", dot: "bg-primary" },
+  ];
+  return defaults[idx % defaults.length]!;
+}
+
 function BranchPerformanceContent({ branch }: { branch: BranchSummary }) {
   const { selectedDate } = useDate();
+  const [selectedMonthEnds, setSelectedMonthEnds] = useState<string[]>([
+    "2026-08-31",
+    "2026-09-30",
+  ]);
 
+  // Fetch performance snapshot data for the completed month pool (up to 4 completed months)
   const perfQuery = useQuery({
-    queryKey: ["branch-performance", branch.id, selectedDate],
-    queryFn: () => api.getBranchPerformance(branch.id, selectedDate),
+    queryKey: ["branch-performance", branch.id, selectedDate, 4],
+    queryFn: () =>
+      api.getBranchPerformance(branch.id, selectedDate, undefined, undefined, 4),
     staleTime: 60_000,
     retry: 1,
   });
@@ -274,11 +326,29 @@ function BranchPerformanceContent({ branch }: { branch: BranchSummary }) {
       .reduce((sum, d) => sum + (d.portfolioShare ?? 0) * 100, 0);
   }, [dpdEntries]);
 
-  // 2. Monthly KPI comparison (previous month vs selected reporting month)
+  // 2. Monthly KPI comparison (user-selectable months: June, July, August, September)
   const comparisonPeriods = data?.comparisonPeriods ?? [];
+
+  const toggleMonth = (periodEnd: string) => {
+    setSelectedMonthEnds((prev) => {
+      if (prev.includes(periodEnd)) {
+        if (prev.length <= 1) return prev; // Keep at least one selected month
+        return prev.filter((end) => end !== periodEnd);
+      }
+      return [...prev, periodEnd].sort();
+    });
+  };
+
+  const effectivePeriods = useMemo(() => {
+    const active = comparisonPeriods.filter((p) => selectedMonthEnds.includes(p.end));
+    return active.length > 0 ? active : comparisonPeriods.slice(-2);
+  }, [comparisonPeriods, selectedMonthEnds]);
+
   const kpiComparisonData = useMemo(() => {
     const monthlyKpis = data?.monthlyKpis ?? {};
-    const [period0, period1] = comparisonPeriods;
+    const lastIdx = effectivePeriods.length - 1;
+    const prevIdx = Math.max(0, lastIdx - 1);
+
     return KPI_CONFIG.map((kpi) => {
       const records = monthlyKpis[kpi.code] ?? [];
       const findValue = (end: string | undefined) => {
@@ -286,26 +356,48 @@ function BranchPerformanceContent({ branch }: { branch: BranchSummary }) {
         const m = records.find((r) => r.period?.end === end);
         return metricToChartValue(m);
       };
-      const prev2Value = period0 ? findValue(period0.end) : null;
-      const prevValue = period1 ? findValue(period1.end) : null;
+
+      const periodValues = effectivePeriods.map((period, idx) => {
+        const val = findValue(period.end);
+        const formatted = val == null ? "—" : `${Math.round(val * 10) / 10}${kpi.unit}`;
+        const shortMonth = period.label.split(" ")[0]?.slice(0, 3) ?? period.label;
+        const heightPct =
+          val == null ? 4 : Math.min(100, Math.max(6, (val / kpi.maxScale) * 100));
+        return {
+          period,
+          idx,
+          label: period.label,
+          shortMonth,
+          value: val,
+          formatted,
+          heightPct,
+        };
+      });
+
+      const prev2Value = periodValues[prevIdx]?.value ?? null;
+      const prevValue = periodValues[lastIdx]?.value ?? null;
       const trendTone = comparisonTone(kpi.code, prev2Value, prevValue);
       const recentValue =
         prevValue == null ? "No data" : `${Math.round(prevValue * 10) / 10}${kpi.unit}`;
       const trendLabel =
         trendTone === "success" ? "improving" : trendTone === "danger" ? "declining" : "flat";
+
       return {
         ...kpi,
-        prev2Label: period0?.label ?? "—",
-        prevLabel: period1?.label ?? "—",
+        periodValues,
+        prev2Label: effectivePeriods[prevIdx]?.label ?? "—",
+        prevLabel: effectivePeriods[lastIdx]?.label ?? "—",
         prev2Value,
         prevValue,
+        prev2Formatted: periodValues[prevIdx]?.formatted ?? "—",
+        prevFormatted: periodValues[lastIdx]?.formatted ?? "—",
         trendTone,
         recentValue,
         trendLabel,
-        unavailable: period0 == null || period1 == null || prev2Value == null || prevValue == null,
+        unavailable: periodValues.every((p) => p.value == null),
       };
     });
-  }, [comparisonPeriods, data?.monthlyKpis]);
+  }, [effectivePeriods, data?.monthlyKpis]);
 
   // Executive summary values
   const collectionEfficiency = metricToChartValue(outcomes.collection_efficiency);
@@ -335,7 +427,10 @@ function BranchPerformanceContent({ branch }: { branch: BranchSummary }) {
   const [activeBucketIndex, setActiveBucketIndex] = useState(1);
 
   const currentPieItem = pieData[activeBucketIndex] ?? pieData[1] ?? pieData[0]!;
-  const activeAccountCount = currentPieItem.accountCount ?? 0;
+  const totalPortfolioAccounts = useMemo(() => {
+    return dpdEntries.reduce((sum, d) => sum + (d.accountCount ?? 0), 0);
+  }, [dpdEntries]);
+  const activeAccountCount = totalPortfolioAccounts > 0 ? totalPortfolioAccounts : (currentPieItem.accountCount ?? 0);
 
   const isLoading = perfQuery.isLoading || networkQuery.isLoading;
   const isError = perfQuery.isError || networkQuery.isError;
@@ -506,51 +601,88 @@ function BranchPerformanceContent({ branch }: { branch: BranchSummary }) {
           </div>
         </GlassCard>
 
-        {/* 2. FULL-SECTION: 5 CORE KPIS COMPARATIVE BAR CHARTS (PREV2 vs PREV) */}
+        {/* 2. FULL-SECTION: 5 CORE KPIS COMPARATIVE BAR CHARTS (2-MONTH OR 4-MONTH TREND) */}
         <div ref={kpiBarsObserver.ref}>
           <GlassCard className="p-5 md:p-6">
-            {/* Header & Legend */}
-            <div className="flex flex-col justify-between gap-3 border-b pb-4 sm:flex-row sm:items-center">
+            {/* Header, Date Filter Selector & Interactive Month Chips */}
+            <div className="flex flex-col justify-between gap-4 border-b pb-4 lg:flex-row lg:items-center">
               <div>
                 <h2 className="font-bold text-display text-base sm:text-lg">
-                  Core KPI Performance Comparison ({comparisonPeriods[0]?.label ?? "Previous"} vs.{" "}
-                  {comparisonPeriods[1]?.label ?? "Current"})
+                  Core KPI Performance Comparison
                 </h2>
-                <p className="text-xs text-muted-foreground">
-                  Side-by-side progression across the 5 primary operational dimensions for{" "}
-                  {branch.name}
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Side-by-side progression across the 5 primary operational dimensions for {branch.name}
                 </p>
               </div>
 
-              {/* Comparison Legend */}
-              <div className="flex items-center gap-4 text-xs font-semibold">
-                <div className="flex items-center gap-2 text-muted-foreground">
-                  <span className="size-3 rounded-xs border border-dashed border-slate-400 bg-slate-200" />
-                  <span className="font-normal">
-                    {comparisonPeriods[0]?.label ?? "Earlier Month"}
-                  </span>
+              <div className="flex flex-wrap items-center gap-3">
+                {/* Quick Presets */}
+                <div className="flex items-center rounded-lg border border-border/80 bg-muted/40 p-0.5 text-xs shadow-2xs">
+                  <button
+                    type="button"
+                    onClick={() => setSelectedMonthEnds(["2026-08-31", "2026-09-30"])}
+                    className={`rounded-md px-2.5 py-1 font-semibold transition cursor-pointer ${
+                      selectedMonthEnds.length === 2 &&
+                      selectedMonthEnds.includes("2026-08-31") &&
+                      selectedMonthEnds.includes("2026-09-30")
+                        ? "bg-card text-foreground shadow-xs border border-border/60"
+                        : "text-muted-foreground hover:text-foreground"
+                    }`}
+                  >
+                    Last 2 Months
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setSelectedMonthEnds(comparisonPeriods.map((p) => p.end))
+                    }
+                    className={`rounded-md px-2.5 py-1 font-semibold transition cursor-pointer ${
+                      selectedMonthEnds.length === comparisonPeriods.length &&
+                      comparisonPeriods.length > 0
+                        ? "bg-card text-foreground shadow-xs border border-border/60"
+                        : "text-muted-foreground hover:text-foreground"
+                    }`}
+                  >
+                    Last 4 Months
+                  </button>
                 </div>
-                <div className="flex items-center gap-2">
-                  <span className="size-3 rounded-xs bg-primary shadow-xs" />
-                  <span className="text-primary font-bold">
-                    {comparisonPeriods[1]?.label ?? "Recent Month"}
-                  </span>
+
+                {/* Interactive Month Selection Chips */}
+                <div className="flex flex-wrap items-center gap-1.5 text-xs">
+                  {comparisonPeriods.map((period, idx) => {
+                    const isSelected = selectedMonthEnds.includes(period.end);
+                    const theme = getMonthTheme(period.end, idx);
+                    return (
+                      <button
+                        key={period.end}
+                        type="button"
+                        onClick={() => toggleMonth(period.end)}
+                        className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-semibold transition cursor-pointer ${
+                          isSelected
+                            ? "border-primary/50 bg-primary/10 text-foreground shadow-2xs font-bold"
+                            : "border-border/60 bg-muted/20 text-muted-foreground hover:border-foreground/30 hover:text-foreground opacity-60 hover:opacity-100"
+                        }`}
+                        title={
+                          isSelected
+                            ? `Click to deselect ${period.label}`
+                            : `Click to select ${period.label}`
+                        }
+                      >
+                        <span className={`size-2.5 rounded-xs ${theme.dot}`} />
+                        <span>{period.label}</span>
+                        {isSelected && (
+                          <span className="text-[10px] text-primary font-bold">✓</span>
+                        )}
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
             </div>
 
-            {/* 5 KPI Columns with Dedicated Y-Axes and Dual Bars */}
+            {/* 5 KPI Columns with Dedicated Y-Axes and Multi-Bars */}
             <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
               {kpiComparisonData.map((kpi, index) => {
-                const earlierHeightPct =
-                  kpi.prev2Value == null
-                    ? 4
-                    : Math.min(100, Math.max(6, (kpi.prev2Value / kpi.maxScale) * 100));
-                const recentHeightPct =
-                  kpi.prevValue == null
-                    ? 4
-                    : Math.min(100, Math.max(6, (kpi.prevValue / kpi.maxScale) * 100));
-
                 return (
                   <div
                     key={kpi.id}
@@ -588,56 +720,88 @@ function BranchPerformanceContent({ branch }: { branch: BranchSummary }) {
                       <div className="absolute top-0 left-6 right-0 border-b border-dashed border-border/50 pointer-events-none" />
                       <div className="absolute bottom-1/2 left-6 right-0 border-b border-dashed border-border/50 pointer-events-none" />
 
-                      {/* Dual Bars Container */}
-                      <div className="relative z-10 flex h-full items-end justify-center gap-2 sm:gap-3">
-                        {/* Earlier Month Bar */}
-                        <div className="group/bar relative flex flex-col items-center justify-end h-full">
-                          <div
-                            className="relative w-6 sm:w-7.5 rounded-t border-b-2 border-dashed border-slate-400 bg-slate-200 transition-all duration-700 ease-out"
-                            style={{
-                              height: kpiBarsObserver.isInView ? `${earlierHeightPct}%` : "0%",
-                              transitionDelay: `${index * 50}ms`,
-                            }}
-                          >
-                            <div className="pointer-events-none absolute -top-7 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-md bg-card border px-1.5 py-0.5 text-[9px] font-medium text-muted-foreground shadow-md opacity-0 transition-opacity duration-150 group-hover/bar:opacity-100 z-30">
-                              {kpi.prev2Label}:{" "}
-                              {kpi.prev2Value == null
-                                ? "No Data"
-                                : `${Math.round(kpi.prev2Value * 10) / 10}${kpi.unit}`}
-                            </div>
-                          </div>
-                          <span className="mt-1.5 text-[10px] font-medium text-muted-foreground/60">
-                            {kpi.prev2Value == null
-                              ? "—"
-                              : `${Math.round(kpi.prev2Value * 10) / 10}${kpi.unit}`}
-                          </span>
-                        </div>
+                      {/* Multi-Bars Container */}
+                      <div
+                        className={`relative z-10 flex h-full items-end justify-center ${
+                          effectivePeriods.length <= 2
+                            ? "gap-2 sm:gap-3"
+                            : "gap-1 sm:gap-1.5"
+                        }`}
+                      >
+                        {kpi.periodValues.map((p, pIdx) => {
+                          const isLatest = pIdx === kpi.periodValues.length - 1;
+                          const theme = getMonthTheme(p.period.end, pIdx);
+                          const barWidthClass =
+                            effectivePeriods.length === 1
+                              ? "w-8 sm:w-10"
+                              : effectivePeriods.length === 2
+                                ? "w-6 sm:w-7.5"
+                                : effectivePeriods.length === 3
+                                  ? "w-4.5 sm:w-5.5"
+                                  : "w-3.5 sm:w-4.5";
 
-                        {/* Recent Month Bar */}
-                        <div className="group/bar relative flex flex-col items-center justify-end h-full">
-                          <div
-                            className={`relative w-6 sm:w-7.5 rounded-t shadow-[0_0_10px_rgba(37,99,235,0.2)] transition-all duration-700 ease-out hover:brightness-110 ${
-                              kpi.trendTone === "success"
-                                ? "bg-emerald-500"
+                          const barBg =
+                            effectivePeriods.length > 1 && isLatest
+                              ? kpi.trendTone === "success"
+                                ? "bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.3)]"
                                 : kpi.trendTone === "danger"
-                                  ? "bg-rose-500"
-                                  : "bg-primary"
-                            }`}
-                            style={{
-                              height: kpiBarsObserver.isInView ? `${recentHeightPct}%` : "0%",
-                              transitionDelay: `${index * 50 + 40}ms`,
-                            }}
-                            title={`${kpi.prevLabel}: ${kpi.recentValue} (${kpi.trendLabel})`}
-                          >
-                            <div className="pointer-events-none absolute -top-7 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-md bg-primary text-primary-foreground px-1.5 py-0.5 text-[9px] font-bold shadow-md opacity-0 transition-opacity duration-150 group-hover/bar:opacity-100 z-30">
-                              {kpi.prevLabel}:{" "}
-                              {kpi.prevValue == null
-                                ? "No Data"
-                                : `${Math.round(kpi.prevValue * 10) / 10}${kpi.unit}`}
+                                  ? "bg-rose-500 shadow-[0_0_8px_rgba(244,63,94,0.3)]"
+                                  : "bg-primary shadow-[0_0_8px_rgba(37,99,235,0.3)]"
+                              : `${theme.bg} ${theme.border}`;
+
+                          return (
+                            <div
+                              key={p.period.end}
+                              className="group/bar relative flex flex-col items-center justify-end h-full"
+                            >
+                              <div
+                                className={`relative rounded-t transition-all duration-700 ease-out hover:brightness-110 ${barWidthClass} ${barBg}`}
+                                style={{
+                                  height: kpiBarsObserver.isInView ? `${p.heightPct}%` : "0%",
+                                  transitionDelay: `${index * 40 + pIdx * 25}ms`,
+                                }}
+                              >
+                                <div className="pointer-events-none absolute -top-7 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-md bg-card border px-1.5 py-0.5 text-[9px] font-semibold text-foreground shadow-md opacity-0 transition-opacity duration-150 group-hover/bar:opacity-100 z-30">
+                                  {p.label}: {p.formatted}
+                                </div>
+                              </div>
+                              <div className="mt-1 flex flex-col items-center">
+                                <span
+                                  className={`text-[9px] ${
+                                    isLatest && effectivePeriods.length > 1
+                                      ? kpi.trendTone === "success"
+                                        ? "font-bold text-emerald-600"
+                                        : kpi.trendTone === "danger"
+                                          ? "font-bold text-rose-600"
+                                          : "font-bold text-primary"
+                                      : "font-medium text-muted-foreground/80"
+                                  }`}
+                                >
+                                  {p.formatted}
+                                </span>
+                                <span className="text-[8px] font-medium text-muted-foreground/60 uppercase">
+                                  {p.shortMonth}
+                                </span>
+                              </div>
                             </div>
-                          </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* Footing comparison labels */}
+                    <div className="mt-2 flex items-center justify-between border-t border-border/50 pt-2 text-[10px]">
+                      {effectivePeriods.length === 1 ? (
+                        <span className="font-bold text-primary">
+                          {kpi.periodValues[0]?.label}: {kpi.periodValues[0]?.formatted}
+                        </span>
+                      ) : effectivePeriods.length === 2 ? (
+                        <>
+                          <span className="text-muted-foreground/70 truncate">
+                            {kpi.prev2Label}: {kpi.prev2Formatted}
+                          </span>
                           <span
-                            className={`mt-1.5 text-[10px] font-bold ${
+                            className={`font-bold truncate ${
                               kpi.trendTone === "success"
                                 ? "text-emerald-600"
                                 : kpi.trendTone === "danger"
@@ -645,28 +809,29 @@ function BranchPerformanceContent({ branch }: { branch: BranchSummary }) {
                                   : "text-primary"
                             }`}
                           >
-                            {kpi.prevValue == null
-                              ? "—"
-                              : `${Math.round(kpi.prevValue * 10) / 10}${kpi.unit}`}
+                            {kpi.prevLabel}: {kpi.prevFormatted}
                           </span>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Footing comparison labels */}
-                    <div className="mt-2 flex items-center justify-between border-t border-border/50 pt-2 text-[10px]">
-                      <span className="text-muted-foreground/70">
-                        {kpi.prev2Label}:{" "}
-                        {kpi.prev2Value == null
-                          ? "—"
-                          : `${Math.round(kpi.prev2Value * 10) / 10}${kpi.unit}`}
-                      </span>
-                      <span className="font-bold text-primary">
-                        {kpi.prevLabel}:{" "}
-                        {kpi.prevValue == null
-                          ? "—"
-                          : `${Math.round(kpi.prevValue * 10) / 10}${kpi.unit}`}
-                      </span>
+                        </>
+                      ) : (
+                        <>
+                          <span className="text-muted-foreground/70 truncate">
+                            {kpi.periodValues[0]?.shortMonth}: {kpi.periodValues[0]?.formatted}
+                          </span>
+                          <span className="text-[9px] text-muted-foreground/40 font-medium">→</span>
+                          <span
+                            className={`font-bold truncate ${
+                              kpi.trendTone === "success"
+                                ? "text-emerald-600"
+                                : kpi.trendTone === "danger"
+                                  ? "text-rose-600"
+                                  : "text-primary"
+                            }`}
+                          >
+                            {kpi.periodValues[kpi.periodValues.length - 1]?.shortMonth}:{" "}
+                            {kpi.periodValues[kpi.periodValues.length - 1]?.formatted}
+                          </span>
+                        </>
+                      )}
                     </div>
                   </div>
                 );
