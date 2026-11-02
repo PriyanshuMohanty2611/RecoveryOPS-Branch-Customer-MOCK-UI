@@ -1122,16 +1122,17 @@ function CustomerDetailView() {
                         style={
                           isCurrent
                             ? {
-                                background: "linear-gradient(135deg, #FF007F 0%, #0B001A 50%, #00F0FF 100%)",
-                                color: "#ffffff",
-                                boxShadow: "0 0 15px rgba(255, 0, 127, 0.3), 0 0 15px rgba(0, 240, 255, 0.3)",
-                                borderColor: "rgba(255, 0, 127, 0.6)",
+                                background:
+                                  "linear-gradient(135deg, #DBEAFE 0%, #E0F2FE 45%, #EDE9FE 100%)",
+                                borderColor: "#3B82F6",
+                                boxShadow:
+                                  "0 4px 20px -2px rgba(59, 130, 246, 0.28), 0 0 12px rgba(99, 102, 241, 0.20)",
                               }
                             : undefined
                         }
-                        className={`relative rounded-xl border p-3.5 text-xs transition-all duration-300 cursor-pointer ${
+                        className={`relative rounded-xl border-2 p-3.5 text-xs transition-all duration-300 cursor-pointer ${
                           isCurrent
-                            ? "scale-[1.01]"
+                            ? "dark:border-blue-400 dark:bg-gradient-to-r dark:from-blue-950/60 dark:via-sky-950/50 dark:to-indigo-950/60 ring-1 ring-blue-500/40 scale-[1.01]"
                             : isCompleted
                               ? "border-emerald-500/35 bg-gradient-to-r from-emerald-500/[0.08] via-teal-500/[0.04] to-card/90 dark:from-emerald-500/[0.14] dark:to-card/80 shadow-xs ring-1 ring-emerald-500/20 hover:border-emerald-500/50"
                               : "border-border/60 bg-gradient-to-r from-muted/25 via-muted/15 to-card/60 hover:bg-muted/40 hover:border-border"
@@ -1177,8 +1178,8 @@ function CustomerDetailView() {
                         {/* Card Title & Top-Right Live/Status Badge */}
                         <div className="flex items-start justify-between gap-2 flex-wrap">
                           <div
-                            className={`font-bold text-xs leading-snug flex-1 ${
-                              isCurrent ? "text-white" : "text-foreground"
+                            className={`font-extrabold text-xs leading-snug flex-1 ${
+                              isCurrent ? "text-slate-900 dark:text-slate-50" : "text-foreground"
                             }`}
                           >
                             {item.title}
@@ -1187,8 +1188,8 @@ function CustomerDetailView() {
                           <div className="flex items-center gap-2 shrink-0">
                             {/* Live Badge in Red on Top Right for Current Stage */}
                             {isCurrent && (
-                              <span className="inline-flex items-center gap-1.5 rounded-full bg-red-500/20 border border-red-400/40 px-2.5 py-0.5 text-[9.5px] font-black uppercase tracking-wider text-red-200 shadow-xs">
-                                <span className="size-1.5 rounded-full bg-red-500 animate-pulse" /> LIVE
+                              <span className="inline-flex items-center gap-1.5 rounded-full bg-rose-600 text-white px-2.5 py-0.5 text-[9.5px] font-black uppercase tracking-wider shadow-xs">
+                                <span className="size-1.5 rounded-full bg-white animate-pulse" /> LIVE
                               </span>
                             )}
 
@@ -1199,7 +1200,13 @@ function CustomerDetailView() {
                               </span>
                             )}
 
-                            <span className={`text-[11px] ${isCurrent ? "text-white/80" : "text-muted-foreground"}`}>
+                            <span
+                              className={`text-[11px] ${
+                                isCurrent
+                                  ? "text-slate-600 dark:text-slate-300 font-bold"
+                                  : "text-muted-foreground"
+                              }`}
+                            >
                               {item.time}
                             </span>
                           </div>
@@ -1208,9 +1215,9 @@ function CustomerDetailView() {
                         {/* Original Category & Status Badges */}
                         <div className="mt-2.5 flex items-center gap-1.5 flex-wrap">
                           <span
-                            className={`rounded-md px-2 py-0.5 text-[10px] font-semibold ${
+                            className={`rounded-md px-2 py-0.5 text-[10px] font-bold ${
                               isCurrent
-                                ? "bg-white/15 text-white border border-white/25 backdrop-blur-xs"
+                                ? "bg-blue-600/15 text-blue-900 dark:text-blue-100 border border-blue-500/35"
                                 : item.category === "Next Best Action"
                                   ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20"
                                   : "bg-primary/10 text-primary"
@@ -1219,9 +1226,9 @@ function CustomerDetailView() {
                             {item.category}
                           </span>
                           <span
-                            className={`rounded-md px-2 py-0.5 text-[10px] font-semibold ${
+                            className={`rounded-md px-2 py-0.5 text-[10px] font-bold ${
                               isCurrent
-                                ? "bg-white/15 text-white border border-white/25 backdrop-blur-xs"
+                                ? "bg-emerald-600/20 text-emerald-950 dark:text-emerald-100 border border-emerald-500/40"
                                 : isCompleted
                                   ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-500/25"
                                   : "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
