@@ -1,22 +1,30 @@
 const fs = require('fs');
 const path = require('path');
 
-const srcDir = path.resolve(__dirname, '.vercel/output/static');
 const distDir = path.resolve(__dirname, 'dist');
+const publicDir = path.resolve(__dirname, 'public');
+
+[distDir, publicDir].forEach(d => fs.mkdirSync(d, { recursive: true }));
+
+const srcDir = path.resolve(__dirname, '.vercel/output/static');
+const altSrc = path.resolve(__dirname, '.output/public');
 
 if (fs.existsSync(srcDir)) {
-  fs.mkdirSync(distDir, { recursive: true });
   fs.cpSync(srcDir, distDir, { recursive: true });
-} else {
-  const altSrc = path.resolve(__dirname, '.output/public');
-  if (fs.existsSync(altSrc)) {
-    fs.mkdirSync(distDir, { recursive: true });
-    fs.cpSync(altSrc, distDir, { recursive: true });
+  fs.cpSync(srcDir, publicDir, { recursive: true });
+} else if (fs.existsSync(altSrc)) {
+  fs.cpSync(altSrc, distDir, { recursive: true });
+  fs.cpSync(altSrc, publicDir, { recursive: true });
+}
+
+const htmlSrc = path.resolve(__dirname, 'index.html');
+if (fs.existsSync(htmlSrc)) {
+  if (!fs.existsSync(path.join(distDir, 'index.html'))) {
+    fs.copyFileSync(htmlSrc, path.join(distDir, 'index.html'));
+  }
+  if (!fs.existsSync(path.join(publicDir, 'index.html'))) {
+    fs.copyFileSync(htmlSrc, path.join(publicDir, 'index.html'));
   }
 }
 
-if (!fs.existsSync(path.join(distDir, 'index.html')) && fs.existsSync(path.resolve(__dirname, 'index.html'))) {
-  fs.copyFileSync(path.resolve(__dirname, 'index.html'), path.join(distDir, 'index.html'));
-}
-console.log('[frontend-dist] dist directory populated successfully.');
-
+console.log('[frontend-dist] dist and public directories populated successfully.');
