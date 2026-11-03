@@ -14,7 +14,7 @@ import type {
   BranchComparisonAIResponse,
   SelectedKpiAIResponse,
   OverallBranchAIResponse,
-} from "@recoveryops/shared";
+} from "../types/shared";
 import {
   getMockNetwork,
   getMockBranches,

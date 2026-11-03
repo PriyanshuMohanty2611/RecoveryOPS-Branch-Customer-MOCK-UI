@@ -11,7 +11,7 @@ import type {
   BranchComparisonAIResponse,
   SelectedKpiAIResponse,
   OverallBranchAIResponse,
-} from "@recoveryops/shared";
+} from "../types/shared";
 
 const DEFAULT_META: ApiMeta = {
   asOfDate: "2026-11-03",
@@ -438,3 +438,4 @@ export function getMockOverallBranchAI(branchId: number): OverallBranchAIRespons
     },
   };
 }
+
