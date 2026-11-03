@@ -40,6 +40,7 @@ import {
 } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
 import { AnimatedKpi } from "@/components/ui/animated-kpi";
+import { InfoTooltip } from "@/components/ui/info-tooltip";
 import { CUSTOMERS, bestTouchpoint, type CustomerData } from "@/data/customer-nba-data";
 import { getCustomerDetailContext } from "@/data/mock-data";
 
@@ -920,7 +921,13 @@ function CustomerDetailView() {
           <div className="flex items-center justify-between mb-3.5">
             <div>
               <h3 className="text-sm font-bold text-foreground flex items-center gap-1.5">
-                <BarChart3 className="size-4 text-primary" /> Business Scorecard
+                <BarChart3 className="size-4 text-primary" />
+                <span>Business Scorecard</span>
+                <InfoTooltip
+                  title="Borrower Business Scorecard"
+                  content="A multi-dimensional behavioral credit scorecard that evaluates this customer's debt exposure, payment adherence discipline, and omnichannel response velocity."
+                  impact="Used by the Next Best Action engine to customize settlement strategies and message tone."
+                />
               </h3>
             </div>
           </div>
@@ -930,9 +937,16 @@ function CustomerDetailView() {
             {/* 1. Outstanding Balance */}
             <div className="rounded-xl border border-border/70 bg-muted/20 p-3.5 flex flex-col justify-between">
               <div>
-                <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
-                  Outstanding Balance
-                </span>
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+                    Outstanding Balance
+                  </span>
+                  <InfoTooltip
+                    title="Current Overdue Balance & DPD"
+                    content="The active delinquent balance owed including past-due principal, interest, and penalties alongside Days Past Due (DPD) aging."
+                    impact="Determines legal urgency, concession eligibility, and collector mandate authority."
+                  />
+                </div>
                 <div className="mt-1.5 flex items-baseline justify-between">
                   <span className="text-xl font-black text-foreground">
                     <AnimatedKpi value={c.exp} prefix="$" />
@@ -957,9 +971,16 @@ function CustomerDetailView() {
             {/* 2. Payment Fulfillment */}
             <div className="rounded-xl border border-border/70 bg-muted/20 p-3.5 flex flex-col justify-between">
               <div>
-                <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
-                  Payment Fulfillment
-                </span>
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+                    Payment Fulfillment
+                  </span>
+                  <InfoTooltip
+                    title="Payment Fulfillment Rate"
+                    content="Percentage of the total required repayment commitment actually settled by the borrower during prior billing and cure cycles."
+                    impact="Differentiates between full settlement ability, partial cash-flow distress, and severe default."
+                  />
+                </div>
                 <div className="mt-1.5 flex items-baseline justify-between">
                   <span
                     className={`text-xl font-black ${
@@ -998,9 +1019,16 @@ function CustomerDetailView() {
             {/* 3. Payment Success Rate */}
             <div className="rounded-xl border border-border/70 bg-muted/20 p-3.5 flex flex-col justify-between">
               <div>
-                <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
-                  Payment Success Rate
-                </span>
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+                    Payment Success Rate
+                  </span>
+                  <InfoTooltip
+                    title="Payment Commitment Success Rate"
+                    content="The percentage of Promise-to-Pay (PTP) agreements this borrower kept versus promises broken."
+                    impact="Borrowers with >=70% rate qualify for fee waivers; lower rates mandate upfront token deposits."
+                  />
+                </div>
                 <div className="mt-1.5 flex items-baseline justify-between">
                   <span
                     className={`text-xl font-black ${
@@ -1035,9 +1063,16 @@ function CustomerDetailView() {
             {/* 4. Contact Success Rate */}
             <div className="rounded-xl border border-border/70 bg-muted/20 p-3.5 flex flex-col justify-between">
               <div>
-                <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
-                  Contact Success Rate
-                </span>
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+                    Contact Success Rate
+                  </span>
+                  <InfoTooltip
+                    title="Contact Channel Success Rate"
+                    content="Historical engagement rate specifically through the recommended outreach channel (e.g., Phone, WhatsApp, Field Visit)."
+                    impact="Directs collectors to reach the borrower on channels where they have the highest probability of answering."
+                  />
+                </div>
                 <div className="mt-1.5 flex items-baseline justify-between">
                   <span
                     className={`text-xl font-black ${

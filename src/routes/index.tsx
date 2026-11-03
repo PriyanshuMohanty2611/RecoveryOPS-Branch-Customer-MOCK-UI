@@ -17,6 +17,7 @@ import {
 import { useState, useMemo } from "react";
 import { AppShell } from "@/components/app-shell";
 import { Button, GlassCard, MetricBar, Status } from "@/components/ui";
+import { InfoTooltip } from "@/components/ui/info-tooltip";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useBranch } from "@/hooks/branch-context";
 import { useDate } from "@/hooks/date-context";
@@ -287,9 +288,16 @@ function NetworkLevelOverview() {
         <div className="grid grid-cols-2 gap-3.5 sm:grid-cols-3 lg:grid-cols-5">
           <GlassCard className="p-4 border-primary/20">
             <div className="flex items-center justify-between">
-              <p className="text-[10px] font-bold uppercase tracking-[.12em] text-muted-foreground">
-                Collection Efficiency
-              </p>
+              <div className="flex items-center gap-1.5">
+                <p className="text-[10px] font-bold uppercase tracking-[.12em] text-muted-foreground">
+                  Collection Efficiency
+                </p>
+                <InfoTooltip
+                  title="Collection Efficiency %"
+                  content="Measures the actual cash recovery collected against the total scheduled overdue balance across the branch network."
+                  impact="Higher is better. Measures overall frontline recovery performance."
+                />
+              </div>
               <div className="flex size-7 items-center justify-center rounded-lg bg-primary/10 text-primary">
                 <Zap className="size-3.5" />
               </div>
@@ -305,9 +313,16 @@ function NetworkLevelOverview() {
 
           <GlassCard className="p-4">
             <div className="flex items-center justify-between">
-              <p className="text-[10px] font-bold uppercase tracking-[.12em] text-muted-foreground">
-                Avg Days to Resolution
-              </p>
+              <div className="flex items-center gap-1.5">
+                <p className="text-[10px] font-bold uppercase tracking-[.12em] text-muted-foreground">
+                  Avg Days to Resolution
+                </p>
+                <InfoTooltip
+                  title="Average Days to Resolution"
+                  content="The average number of days elapsed from initial delinquency onset until full repayment or regularized account status."
+                  impact="Lower is better. Reflects collection velocity and speed of curing delinquent debt."
+                />
+              </div>
               <div className="flex size-7 items-center justify-center rounded-lg bg-blue-500/10 text-blue-500">
                 <Clock3 className="size-3.5" />
               </div>
@@ -320,9 +335,16 @@ function NetworkLevelOverview() {
 
           <GlassCard className="p-4">
             <div className="flex items-center justify-between">
-              <p className="text-[10px] font-bold uppercase tracking-[.12em] text-muted-foreground">
-                PTP Kept %
-              </p>
+              <div className="flex items-center gap-1.5">
+                <p className="text-[10px] font-bold uppercase tracking-[.12em] text-muted-foreground">
+                  PTP Kept %
+                </p>
+                <InfoTooltip
+                  title="Promise-to-Pay (PTP) Kept Rate"
+                  content="The percentage of payment commitments made by delinquent borrowers that were successfully honored on or before the promised date."
+                  impact="Higher is better. Evaluates borrower payment commitment credibility and negotiation effectiveness."
+                />
+              </div>
               <div className="flex size-7 items-center justify-center rounded-lg bg-amber-500/10 text-amber-500">
                 <CheckCircle2 className="size-3.5" />
               </div>
@@ -335,9 +357,16 @@ function NetworkLevelOverview() {
 
           <GlassCard className="p-4">
             <div className="flex items-center justify-between">
-              <p className="text-[10px] font-bold uppercase tracking-[.12em] text-muted-foreground">
-                Contact Rate
-              </p>
+              <div className="flex items-center gap-1.5">
+                <p className="text-[10px] font-bold uppercase tracking-[.12em] text-muted-foreground">
+                  Contact Rate
+                </p>
+                <InfoTooltip
+                  title="Customer Contact Rate"
+                  content="The proportion of delinquent borrowers successfully engaged through phone, WhatsApp, SMS, or field visits."
+                  impact="Higher is better. Assesses frontline collector reachability and contactability."
+                />
+              </div>
               <div className="flex size-7 items-center justify-center rounded-lg bg-emerald-500/10 text-emerald-600">
                 <PhoneCall className="size-3.5" />
               </div>
@@ -350,9 +379,16 @@ function NetworkLevelOverview() {
 
           <GlassCard className="p-4">
             <div className="flex items-center justify-between">
-              <p className="text-[10px] font-bold uppercase tracking-[.12em] text-muted-foreground">
-                30+ DPD Portfolio %
-              </p>
+              <div className="flex items-center gap-1.5">
+                <p className="text-[10px] font-bold uppercase tracking-[.12em] text-muted-foreground">
+                  30+ DPD Portfolio %
+                </p>
+                <InfoTooltip
+                  title="30+ DPD Portfolio Concentration"
+                  content="The concentration of portfolio balance that has aged beyond 30 days past due (elevated credit risk)."
+                  impact="Lower is better. Prevents loans from sliding into hard roll rates (60+, 90+ DPD)."
+                />
+              </div>
               <div className="flex size-7 items-center justify-center rounded-lg bg-rose-500/10 text-rose-500">
                 <ShieldAlert className="size-3.5" />
               </div>
@@ -874,9 +910,16 @@ function SelectedBranchOverview({ branch }: { branch: BranchSummary }) {
         <div className="grid grid-cols-2 gap-3.5 sm:grid-cols-3 lg:grid-cols-5">
           <GlassCard className="p-4 border-primary/20">
             <div className="flex items-center justify-between">
-              <p className="text-[10px] font-bold uppercase tracking-[.12em] text-muted-foreground">
-                Collection Efficiency %
-              </p>
+              <div className="flex items-center gap-1.5">
+                <p className="text-[10px] font-bold uppercase tracking-[.12em] text-muted-foreground">
+                  Collection Efficiency %
+                </p>
+                <InfoTooltip
+                  title="Collection Efficiency %"
+                  content="Measures the actual cash recovery collected against the total scheduled overdue balance for this branch."
+                  impact="Higher is better. Measures overall frontline recovery performance."
+                />
+              </div>
               <Zap className="size-4 text-primary" />
             </div>
             <p className="mt-2 text-2xl sm:text-3xl font-bold text-display text-primary">
@@ -896,9 +939,16 @@ function SelectedBranchOverview({ branch }: { branch: BranchSummary }) {
 
           <GlassCard className="p-4">
             <div className="flex items-center justify-between">
-              <p className="text-[10px] font-bold uppercase tracking-[.12em] text-muted-foreground">
-                Average Days to Resolution
-              </p>
+              <div className="flex items-center gap-1.5">
+                <p className="text-[10px] font-bold uppercase tracking-[.12em] text-muted-foreground">
+                  Average Days to Resolution
+                </p>
+                <InfoTooltip
+                  title="Average Days to Resolution"
+                  content="The average number of days elapsed from initial delinquency onset until full repayment or regularized account status."
+                  impact="Lower is better. Reflects collection velocity and speed of curing delinquent debt."
+                />
+              </div>
               <Clock3 className="size-4 text-amber-500" />
             </div>
             <p className="mt-2 text-2xl sm:text-3xl font-bold text-display">
@@ -924,9 +974,16 @@ function SelectedBranchOverview({ branch }: { branch: BranchSummary }) {
 
           <GlassCard className="p-4">
             <div className="flex items-center justify-between">
-              <p className="text-[10px] font-bold uppercase tracking-[.12em] text-muted-foreground">
-                PTP Kept %
-              </p>
+              <div className="flex items-center gap-1.5">
+                <p className="text-[10px] font-bold uppercase tracking-[.12em] text-muted-foreground">
+                  PTP Kept %
+                </p>
+                <InfoTooltip
+                  title="Promise-to-Pay (PTP) Kept Rate"
+                  content="The percentage of payment commitments made by delinquent borrowers that were successfully honored on or before the promised date."
+                  impact="Higher is better. Evaluates borrower payment commitment credibility and negotiation effectiveness."
+                />
+              </div>
               <CheckCircle2 className="size-4 text-emerald-500" />
             </div>
             <p className="mt-2 text-2xl sm:text-3xl font-bold text-display">
@@ -962,9 +1019,16 @@ function SelectedBranchOverview({ branch }: { branch: BranchSummary }) {
 
           <GlassCard className="p-4">
             <div className="flex items-center justify-between">
-              <p className="text-[10px] font-bold uppercase tracking-[.12em] text-muted-foreground">
-                Contact Rate
-              </p>
+              <div className="flex items-center gap-1.5">
+                <p className="text-[10px] font-bold uppercase tracking-[.12em] text-muted-foreground">
+                  Contact Rate
+                </p>
+                <InfoTooltip
+                  title="Customer Contact Rate"
+                  content="The proportion of delinquent borrowers successfully engaged through phone, WhatsApp, SMS, or field visits."
+                  impact="Higher is better. Assesses frontline collector reachability and contactability."
+                />
+              </div>
               <PhoneCall className="size-4 text-primary" />
             </div>
             <p className="mt-2 text-2xl sm:text-3xl font-bold text-display">
@@ -1000,9 +1064,16 @@ function SelectedBranchOverview({ branch }: { branch: BranchSummary }) {
 
           <GlassCard className="p-4">
             <div className="flex items-center justify-between">
-              <p className="text-[10px] font-bold uppercase tracking-[.12em] text-muted-foreground">
-                DPD Distribution
-              </p>
+              <div className="flex items-center gap-1.5">
+                <p className="text-[10px] font-bold uppercase tracking-[.12em] text-muted-foreground">
+                  DPD Distribution
+                </p>
+                <InfoTooltip
+                  title="30+ DPD Portfolio Concentration"
+                  content="The concentration of branch portfolio balance that has aged beyond 30 days past due (elevated credit risk)."
+                  impact="Lower is better. Prevents loans from sliding into hard roll rates (60+, 90+ DPD)."
+                />
+              </div>
               <ShieldAlert className="size-4 text-rose-500" />
             </div>
             <p className="mt-2 text-2xl sm:text-3xl font-bold text-display">

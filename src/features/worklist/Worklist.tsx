@@ -25,6 +25,7 @@ import {
   PieChart as PieChartIcon,
 } from "lucide-react";
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip as RechartsTooltip } from "recharts";
+import { InfoTooltip } from "@/components/ui/info-tooltip";
 
 // Communication Channels (Phone calls, Mails, Field Visit)
 const CHANNELS = [
@@ -331,8 +332,15 @@ export function Worklist() {
           <div className="relative overflow-hidden rounded-2xl border border-slate-400/80 dark:border-slate-600 bg-card p-4 sm:p-5 shadow-sm before:absolute before:inset-x-0 before:top-0 before:h-1 before:bg-gradient-to-r before:from-violet-600 before:to-pink-600 flex flex-col justify-between">
             <div>
               <div className="flex items-center justify-between pb-1">
-                <div className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
-                  Nos of Customers
+                <div className="flex items-center gap-1.5">
+                  <div className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
+                    Nos of Customers
+                  </div>
+                  <InfoTooltip
+                    title="Delinquent Borrowers in Queue"
+                    content="Total unique borrower accounts currently allocated to this branch requiring prioritized recovery outreach."
+                    impact="Defines the daily workload and contact bandwidth required per collection agent."
+                  />
                 </div>
                 <span className="text-[10px] font-extrabold text-foreground bg-slate-100 dark:bg-slate-800 px-2.5 py-0.5 rounded-md border border-slate-400/80 dark:border-slate-600 shadow-2xs">
                   Active Queue
@@ -352,8 +360,15 @@ export function Worklist() {
             {/* Total Amount in a stylized prominent box with proper aesthetics */}
             <div className="mt-3 rounded-xl border border-border/80 bg-muted/40 p-2.5 flex items-center justify-between">
               <div className="space-y-0.5">
-                <div className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
-                  Total Delinquent Exposure
+                <div className="flex items-center gap-1.5">
+                  <div className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+                    Total Delinquent Exposure
+                  </div>
+                  <InfoTooltip
+                    title="Total Delinquent Exposure"
+                    content="The cumulative outstanding loan principal, interest, and late charges due across all active delinquent accounts in this queue."
+                    impact="Indicates total branch capital at risk of turning into Non-Performing Assets (NPAs)."
+                  />
                 </div>
                 <div className="text-lg sm:text-xl font-black text-foreground tracking-tight">
                   ${totalAmount.toLocaleString()}
@@ -370,7 +385,12 @@ export function Worklist() {
             <div className="flex items-center justify-between pb-1">
               <div className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
                 <PieChartIcon className="size-3.5 text-cyan-500" />
-                Buckets Distribution
+                <span>Buckets Distribution</span>
+                <InfoTooltip
+                  title="DPD (Days Past Due) Buckets"
+                  content="Categorization of borrowers by delinquency aging: Current (0 DPD), Early Delinquency (1-30 DPD), Roll Risk (30-60 DPD), and Critical Risk (90+ DPD)."
+                  impact="Accounts in higher DPD buckets require more urgent intervention to avoid loan write-offs."
+                />
               </div>
               <span className="text-[10px] font-extrabold text-foreground bg-slate-100 dark:bg-slate-800 px-2 py-0.5 rounded-md border border-slate-400/80 dark:border-slate-600 shadow-2xs">
                 {totalInQueue} Borrowers
@@ -450,8 +470,15 @@ export function Worklist() {
           <div className="relative overflow-hidden rounded-2xl border border-slate-400/80 dark:border-slate-600 bg-card p-4 sm:p-5 shadow-sm before:absolute before:inset-x-0 before:top-0 before:h-1 before:bg-gradient-to-r before:from-emerald-500 before:to-teal-500 flex flex-col justify-between">
             <div>
               <div className="flex items-center justify-between pb-1">
-                <div className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
-                  Adoption Rate
+                <div className="flex items-center gap-1.5">
+                  <div className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
+                    Adoption Rate
+                  </div>
+                  <InfoTooltip
+                    title="Recommendation Adoption Rate"
+                    content="The percentage of collection interactions where collectors followed the system's recommended outreach channel, time slot, and negotiation cadence."
+                    impact="Adopting system recommendations yields +15% to +20% higher resolution recovery rates."
+                  />
                 </div>
                 <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded-md">
                   Active Execution

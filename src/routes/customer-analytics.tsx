@@ -8,6 +8,7 @@ import {
   ListChecks,
 } from "lucide-react";
 import { AnimatedKpi } from "@/components/ui/animated-kpi";
+import { InfoTooltip } from "@/components/ui/info-tooltip";
 import { useScrollInView } from "@/hooks/use-scroll-in-view";
 import {
   CUSTOMERS,
@@ -101,8 +102,15 @@ function BranchCard({
         {/* 2 CLEAN DPD METRIC CARDS WITH ANIMATED COUNT-UP */}
         <div className="grid grid-cols-2 gap-3 pt-2">
           <div className="rounded-xl border border-border/80 bg-muted/40 p-4 flex flex-col justify-between">
-            <div className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
-              DPD Amount
+            <div className="flex items-center gap-1.5">
+              <div className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+                DPD Amount
+              </div>
+              <InfoTooltip
+                title="Delinquent Exposure Amount"
+                content="Total cumulative overdue loan balance across all accounts in default for this branch."
+                impact="Represents the branch's active balance at credit risk."
+              />
             </div>
             <div className="text-xl font-black text-foreground mt-1.5 tracking-tight">
               <AnimatedKpi value={b.totalExp} prefix="$" />
@@ -113,8 +121,15 @@ function BranchCard({
           </div>
 
           <div className="rounded-xl border border-border/80 bg-muted/40 p-4 flex flex-col justify-between">
-            <div className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
-              DPD Accounts
+            <div className="flex items-center gap-1.5">
+              <div className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+                DPD Accounts
+              </div>
+              <InfoTooltip
+                title="Delinquent Accounts Count"
+                content="Number of unique delinquent borrower accounts assigned to this branch's priority recovery queue."
+                impact="Determines frontline agent allocation and collector case capacity."
+              />
             </div>
             <div className="text-xl font-black text-foreground mt-1.5 tracking-tight">
               <AnimatedKpi value={b.customers.length} suffix=" Accounts" />
@@ -129,8 +144,15 @@ function BranchCard({
         <div className="rounded-xl border border-border/80 bg-muted/30 p-3.5 space-y-2.5">
           <div className="flex items-center justify-between text-xs">
             <div>
-              <div className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
-                Recovery Attainment
+              <div className="flex items-center gap-1.5">
+                <div className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+                  Recovery Attainment
+                </div>
+                <InfoTooltip
+                  title="Recovery Target Attainment"
+                  content="Percentage of the monthly recovery target successfully collected by this branch."
+                  impact="Branch target attainment tracks operational collections efficiency."
+                />
               </div>
               <div className="text-sm font-black text-foreground mt-0.5">
                 <AnimatedKpi value={b.recoveredAmt} prefix="$" />{" "}
