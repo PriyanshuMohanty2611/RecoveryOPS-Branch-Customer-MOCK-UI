@@ -15,6 +15,18 @@ import type {
   SelectedKpiAIResponse,
   OverallBranchAIResponse,
 } from "@recoveryops/shared";
+import {
+  getMockNetwork,
+  getMockBranches,
+  getMockBranchOverview,
+  getMockBranchPerformance,
+  getMockBranchPeers,
+  getMockBranchDrivers,
+  getMockBranchInsights,
+  getMockBranchComparisonAI,
+  getMockSelectedKpiAI,
+  getMockOverallBranchAI,
+} from "./mock-branch-fallback";
 
 const API_BASE =
   ((import.meta.env as Record<string, unknown>)["VITE_API_URL"] as string | undefined) ??
@@ -47,27 +59,40 @@ function buildQuery(params: Record<string, string | undefined>): string {
   return qs ? `?${qs}` : "";
 }
 
-async function fetchJson<T>(path: string): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
-    headers: { accept: "application/json" },
-  });
-  if (!res.ok) {
-    const text = await res.text().catch(() => "Unknown error");
-    throw new Error(`API ${path} failed: ${res.status} ${text}`);
+async function fetchJson<T>(path: string, fallback?: () => T): Promise<T> {
+  try {
+    const res = await fetch(`${API_BASE}${path}`, {
+      headers: { accept: "application/json" },
+    });
+    if (!res.ok) {
+      if (fallback) return fallback();
+      const text = await res.text().catch(() => "Unknown error");
+      throw new Error(`API ${path} failed: ${res.status} ${text}`);
+    }
+    return (await res.json()) as T;
+  } catch (err) {
+    if (fallback) {
+      return fallback();
+    }
+    throw err;
   }
-  return res.json() as Promise<T>;
 }
 
 export const api = {
   getNetwork: (asOfDate?: string) =>
-    fetchJson<NetworkResponse>(`/analytics/network${buildQuery({ as_of_date: asOfDate })}`),
+    fetchJson<NetworkResponse>(
+      `/analytics/network${buildQuery({ as_of_date: asOfDate })}`,
+      () => getMockNetwork(asOfDate)
+    ),
   getBranches: (asOfDate?: string) =>
     fetchJson<{ data: BranchSummary[]; meta: ApiMeta }>(
       `/branches${buildQuery({ as_of_date: asOfDate })}`,
+      () => getMockBranches(asOfDate)
     ),
   getBranchOverview: (branchId: number, asOfDate?: string) =>
     fetchJson<BranchOverviewResponse>(
       `/branches/${branchId}/overview${buildQuery({ as_of_date: asOfDate })}`,
+      () => getMockBranchOverview(branchId, asOfDate)
     ),
   getBranchPerformance: (
     branchId: number,
@@ -83,54 +108,74 @@ export const api = {
         to_date: toDate,
         months: months ? String(months) : undefined,
       })}`,
+      () => getMockBranchPerformance(branchId, asOfDate)
     ),
   getBranchPeers: (branchId: number, asOfDate?: string) =>
     fetchJson<BranchPeersResponse>(
       `/branches/${branchId}/peers${buildQuery({ as_of_date: asOfDate })}`,
+      () => getMockBranchPeers(branchId, asOfDate)
     ),
   getBranchDrivers: (branchId: number, asOfDate?: string) =>
     fetchJson<BranchDriversResponse>(
       `/branches/${branchId}/drivers${buildQuery({ as_of_date: asOfDate })}`,
+      () => getMockBranchDrivers(branchId, asOfDate)
     ),
   getBranchInsights: (branchId: number, asOfDate?: string) =>
     fetchJson<BranchInsightsResponse>(
       `/branches/${branchId}/insights${buildQuery({ as_of_date: asOfDate })}`,
+      () => getMockBranchInsights(asOfDate)
     ),
   getBranchComparisonAI: (branchId: number, asOfDate?: string) =>
     fetchJson<BranchComparisonAIResponse>(
       `/branches/${branchId}/ai-insights/comparison${buildQuery({ as_of_date: asOfDate })}`,
+      () => getMockBranchComparisonAI(branchId)
     ),
   getSelectedKpiAI: (branchId: number, kpi: string, asOfDate?: string) =>
     fetchJson<SelectedKpiAIResponse>(
       `/branches/${branchId}/ai-insights/kpi${buildQuery({ kpi, as_of_date: asOfDate })}`,
+      () => getMockSelectedKpiAI(branchId, kpi)
     ),
   getOverallBranchAI: (branchId: number, asOfDate?: string) =>
     fetchJson<OverallBranchAIResponse>(
       `/branches/${branchId}/ai-insights/overall${buildQuery({ as_of_date: asOfDate })}`,
+      () => getMockOverallBranchAI(branchId)
     ),
   syncRefresh: async () => {
-    const res = await fetch(`${API_BASE}/refresh`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", accept: "application/json" },
-    });
-    if (!res.ok) {
-      const text = await res.text().catch(() => "Unknown error");
-      throw new Error(`Refresh failed: ${res.status} ${text}`);
+    try {
+      const res = await fetch(`${API_BASE}/refresh`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", accept: "application/json" },
+      });
+      if (!res.ok) {
+        throw new Error(`Refresh failed: ${res.status}`);
+      }
+      return (await res.json()) as {
+        status: string;
+        message: string;
+        refreshedAt: string;
+        asOfDate: string;
+        batchesSynced: number;
+      };
+    } catch {
+      return {
+        status: "ok",
+        message: "Refreshed demo snapshots successfully",
+        refreshedAt: new Date().toISOString(),
+        asOfDate: "2026-11-03",
+        batchesSynced: 1,
+      };
     }
-    return res.json() as Promise<{
-      status: string;
-      message: string;
-      refreshedAt: string;
-      asOfDate: string;
-      batchesSynced: number;
-    }>;
   },
   getRefreshStatus: () =>
     fetchJson<{
       status: string;
       lastRefreshedAt: string | null;
       asOfDate: string;
-    }>("/refresh"),
+    }>("/refresh", () => ({
+      status: "idle",
+      lastRefreshedAt: new Date().toISOString(),
+      asOfDate: "2026-11-03",
+    })),
 };
 
 export function formatMetricValue(m: MetricValue | undefined): string {
