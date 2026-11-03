@@ -19,3 +19,4 @@ if (!fs.existsSync(path.join(distDir, 'index.html')) && fs.existsSync(path.resol
   fs.copyFileSync(path.resolve(__dirname, 'index.html'), path.join(distDir, 'index.html'));
 }
 console.log('[frontend-dist] dist directory populated successfully.');
+
