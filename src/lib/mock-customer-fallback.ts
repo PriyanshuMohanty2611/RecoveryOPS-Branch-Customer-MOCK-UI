@@ -360,3 +360,75 @@ export function getMockCustomerNba(customerCode: string): {
     },
   };
 }
+
+export function getMockCustomerTimeline(customerCode: string) {
+  const c = resolveCustomer(customerCode);
+  const chName = c.ch?.[0]?.[0] ?? "Phone Call";
+  const chCode = chName.toUpperCase().includes("PHONE")
+    ? "PHONE"
+    : chName.toUpperCase().includes("MAIL")
+    ? "EMAIL"
+    : "FIELD_VISIT";
+
+  return {
+    data: [
+      {
+        eventId: `engagement_event:${c.id}-01`,
+        sourceTable: "engagement_event",
+        kind: "MESSAGE" as const,
+        category: "Suggested Message",
+        title: "Payment Plan Information — Clicked",
+        status: "CLICKED",
+        channelCode: "EMAIL",
+        channelName: "Email",
+        time: "2026-09-06T02:00:00",
+        occurredAt: "2026-09-06T02:00:00",
+        amount: null,
+        messageRef: `MSG-${c.id}`,
+        isLatest: true,
+        tone: "green" as const,
+      },
+      {
+        eventId: `contact_event:${c.id}-02`,
+        sourceTable: "contact_event",
+        kind: "CONTACT" as const,
+        category: "Outreach History",
+        title: `${chName} — Connected`,
+        status: "CONNECTED",
+        channelCode: chCode,
+        channelName: chName,
+        time: "2026-08-08T00:00:00",
+        occurredAt: "2026-08-08T00:00:00",
+        amount: null,
+        messageRef: null,
+        isLatest: false,
+        tone: "green" as const,
+      },
+      {
+        eventId: `contact_event:${c.id}-03`,
+        sourceTable: "contact_event",
+        kind: "CONTACT" as const,
+        category: "Outreach History",
+        title: `${chName} — No answer`,
+        status: "NO_ANSWER",
+        channelCode: chCode,
+        channelName: chName,
+        time: "2026-07-07T00:00:00",
+        occurredAt: "2026-07-07T00:00:00",
+        amount: null,
+        messageRef: null,
+        isLatest: false,
+        tone: "rose" as const,
+      },
+    ],
+    nextAction: null,
+    meta: {
+      asOfDate: "2026-11-02",
+      source: "mock_timeline_fallback",
+      isDemo: true,
+      total: 3,
+      accountScoped: false,
+    },
+  };
+}
+

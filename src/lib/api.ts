@@ -19,6 +19,7 @@ import {
   getMockCustomerDetail,
   getMockCustomerOutreachStats,
   getMockCustomerNba,
+  getMockCustomerTimeline,
 } from "./mock-customer-fallback";
 import {
   getMockNetwork,
@@ -501,6 +502,7 @@ export const api = {
       `/customers/${customerCode}/timeline${buildQuery({
         account_id: accountId != null ? String(accountId) : undefined,
       })}`,
+      () => getMockCustomerTimeline(customerCode),
     ),
   recordCustomerOutcome: (customerCode: string, payload: Record<string, unknown>) =>
     fetchJson<{ data: Record<string, unknown>; meta: ApiMeta }>(
