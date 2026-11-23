@@ -1,11 +1,6 @@
 import * as React from "react";
 import { Info } from "lucide-react";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 
 interface InfoTooltipProps {
@@ -39,7 +34,7 @@ export function InfoTooltip({
             }}
             className={cn(
               "inline-flex items-center justify-center size-4 rounded-full text-muted-foreground/60 hover:text-primary hover:bg-primary/10 transition-colors cursor-help focus:outline-none focus-visible:ring-1 focus-visible:ring-primary shrink-0 select-none",
-              className
+              className,
             )}
             aria-label={title ? `Information about ${title}` : "Metric information"}
           >
@@ -59,12 +54,12 @@ export function InfoTooltip({
               {title}
             </div>
           )}
-          <p className="text-slate-600 leading-relaxed text-[11.5px] font-normal">
-            {content}
-          </p>
+          <p className="text-slate-600 leading-relaxed text-[11.5px] font-normal">{content}</p>
           {impact && (
             <div className="mt-2 pt-1.5 border-t border-slate-200 text-[10.5px] text-emerald-600 font-medium flex items-center gap-1">
-              <span className="font-bold uppercase tracking-wider text-[9px] text-emerald-700">Business Impact:</span>
+              <span className="font-bold uppercase tracking-wider text-[9px] text-emerald-700">
+                Business Impact:
+              </span>
               <span>{impact}</span>
             </div>
           )}

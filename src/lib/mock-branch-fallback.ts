@@ -39,11 +39,26 @@ export const MOCK_BRANCHES_DATA: BranchSummary[] = [
     name: "Main Street Branch",
     region: "Northeast",
     metrics: {
-      collection_efficiency: createMetric("collection_efficiency", "Collection Efficiency", 0.884, "percent"),
-      avg_days_to_resolve: createMetric("avg_days_to_resolve", "Average Days to Resolution", 17.5, "days"),
+      collection_efficiency: createMetric(
+        "collection_efficiency",
+        "Collection Efficiency",
+        0.884,
+        "percent",
+      ),
+      avg_days_to_resolve: createMetric(
+        "avg_days_to_resolve",
+        "Average Days to Resolution",
+        17.5,
+        "days",
+      ),
       ptp_kept_rate: createMetric("ptp_kept_rate", "PTP Kept %", 0.792, "percent"),
       contact_rate: createMetric("contact_rate", "Contact Rate", 0.814, "percent"),
-      dpd_30_plus_concentration: createMetric("dpd_30_plus_concentration", "30+ DPD Portfolio Concentration", 0.125, "percent"),
+      dpd_30_plus_concentration: createMetric(
+        "dpd_30_plus_concentration",
+        "30+ DPD Portfolio Concentration",
+        0.125,
+        "percent",
+      ),
     },
   },
   {
@@ -52,11 +67,26 @@ export const MOCK_BRANCHES_DATA: BranchSummary[] = [
     name: "Oakwood Branch",
     region: "Midwest",
     metrics: {
-      collection_efficiency: createMetric("collection_efficiency", "Collection Efficiency", 0.842, "percent"),
-      avg_days_to_resolve: createMetric("avg_days_to_resolve", "Average Days to Resolution", 19.8, "days"),
+      collection_efficiency: createMetric(
+        "collection_efficiency",
+        "Collection Efficiency",
+        0.842,
+        "percent",
+      ),
+      avg_days_to_resolve: createMetric(
+        "avg_days_to_resolve",
+        "Average Days to Resolution",
+        19.8,
+        "days",
+      ),
       ptp_kept_rate: createMetric("ptp_kept_rate", "PTP Kept %", 0.745, "percent"),
       contact_rate: createMetric("contact_rate", "Contact Rate", 0.781, "percent"),
-      dpd_30_plus_concentration: createMetric("dpd_30_plus_concentration", "30+ DPD Portfolio Concentration", 0.152, "percent"),
+      dpd_30_plus_concentration: createMetric(
+        "dpd_30_plus_concentration",
+        "30+ DPD Portfolio Concentration",
+        0.152,
+        "percent",
+      ),
     },
   },
   {
@@ -65,11 +95,26 @@ export const MOCK_BRANCHES_DATA: BranchSummary[] = [
     name: "Pine Valley Branch",
     region: "Southeast",
     metrics: {
-      collection_efficiency: createMetric("collection_efficiency", "Collection Efficiency", 0.798, "percent"),
-      avg_days_to_resolve: createMetric("avg_days_to_resolve", "Average Days to Resolution", 22.4, "days"),
+      collection_efficiency: createMetric(
+        "collection_efficiency",
+        "Collection Efficiency",
+        0.798,
+        "percent",
+      ),
+      avg_days_to_resolve: createMetric(
+        "avg_days_to_resolve",
+        "Average Days to Resolution",
+        22.4,
+        "days",
+      ),
       ptp_kept_rate: createMetric("ptp_kept_rate", "PTP Kept %", 0.712, "percent"),
       contact_rate: createMetric("contact_rate", "Contact Rate", 0.738, "percent"),
-      dpd_30_plus_concentration: createMetric("dpd_30_plus_concentration", "30+ DPD Portfolio Concentration", 0.178, "percent"),
+      dpd_30_plus_concentration: createMetric(
+        "dpd_30_plus_concentration",
+        "30+ DPD Portfolio Concentration",
+        0.178,
+        "percent",
+      ),
     },
   },
   {
@@ -78,11 +123,26 @@ export const MOCK_BRANCHES_DATA: BranchSummary[] = [
     name: "Riverfront Branch",
     region: "Southwest",
     metrics: {
-      collection_efficiency: createMetric("collection_efficiency", "Collection Efficiency", 0.765, "percent"),
-      avg_days_to_resolve: createMetric("avg_days_to_resolve", "Average Days to Resolution", 24.6, "days"),
+      collection_efficiency: createMetric(
+        "collection_efficiency",
+        "Collection Efficiency",
+        0.765,
+        "percent",
+      ),
+      avg_days_to_resolve: createMetric(
+        "avg_days_to_resolve",
+        "Average Days to Resolution",
+        24.6,
+        "days",
+      ),
       ptp_kept_rate: createMetric("ptp_kept_rate", "PTP Kept %", 0.678, "percent"),
       contact_rate: createMetric("contact_rate", "Contact Rate", 0.704, "percent"),
-      dpd_30_plus_concentration: createMetric("dpd_30_plus_concentration", "30+ DPD Portfolio Concentration", 0.201, "percent"),
+      dpd_30_plus_concentration: createMetric(
+        "dpd_30_plus_concentration",
+        "30+ DPD Portfolio Concentration",
+        0.201,
+        "percent",
+      ),
     },
   },
   {
@@ -91,11 +151,26 @@ export const MOCK_BRANCHES_DATA: BranchSummary[] = [
     name: "Hilltop Branch",
     region: "West",
     metrics: {
-      collection_efficiency: createMetric("collection_efficiency", "Collection Efficiency", 0.856, "percent"),
-      avg_days_to_resolve: createMetric("avg_days_to_resolve", "Average Days to Resolution", 18.2, "days"),
+      collection_efficiency: createMetric(
+        "collection_efficiency",
+        "Collection Efficiency",
+        0.856,
+        "percent",
+      ),
+      avg_days_to_resolve: createMetric(
+        "avg_days_to_resolve",
+        "Average Days to Resolution",
+        18.2,
+        "days",
+      ),
       ptp_kept_rate: createMetric("ptp_kept_rate", "PTP Kept %", 0.768, "percent"),
       contact_rate: createMetric("contact_rate", "Contact Rate", 0.795, "percent"),
-      dpd_30_plus_concentration: createMetric("dpd_30_plus_concentration", "30+ DPD Portfolio Concentration", 0.138, "percent"),
+      dpd_30_plus_concentration: createMetric(
+        "dpd_30_plus_concentration",
+        "30+ DPD Portfolio Concentration",
+        0.138,
+        "percent",
+      ),
     },
   },
   {
@@ -104,11 +179,26 @@ export const MOCK_BRANCHES_DATA: BranchSummary[] = [
     name: "Lakeside Branch",
     region: "Northwest",
     metrics: {
-      collection_efficiency: createMetric("collection_efficiency", "Collection Efficiency", 0.731, "percent"),
-      avg_days_to_resolve: createMetric("avg_days_to_resolve", "Average Days to Resolution", 27.8, "days"),
+      collection_efficiency: createMetric(
+        "collection_efficiency",
+        "Collection Efficiency",
+        0.731,
+        "percent",
+      ),
+      avg_days_to_resolve: createMetric(
+        "avg_days_to_resolve",
+        "Average Days to Resolution",
+        27.8,
+        "days",
+      ),
       ptp_kept_rate: createMetric("ptp_kept_rate", "PTP Kept %", 0.635, "percent"),
       contact_rate: createMetric("contact_rate", "Contact Rate", 0.669, "percent"),
-      dpd_30_plus_concentration: createMetric("dpd_30_plus_concentration", "30+ DPD Portfolio Concentration", 0.226, "percent"),
+      dpd_30_plus_concentration: createMetric(
+        "dpd_30_plus_concentration",
+        "30+ DPD Portfolio Concentration",
+        0.226,
+        "percent",
+      ),
     },
   },
   {
@@ -117,11 +207,26 @@ export const MOCK_BRANCHES_DATA: BranchSummary[] = [
     name: "Downtown Branch",
     region: "Northeast",
     metrics: {
-      collection_efficiency: createMetric("collection_efficiency", "Collection Efficiency", 0.819, "percent"),
-      avg_days_to_resolve: createMetric("avg_days_to_resolve", "Average Days to Resolution", 21.0, "days"),
+      collection_efficiency: createMetric(
+        "collection_efficiency",
+        "Collection Efficiency",
+        0.819,
+        "percent",
+      ),
+      avg_days_to_resolve: createMetric(
+        "avg_days_to_resolve",
+        "Average Days to Resolution",
+        21.0,
+        "days",
+      ),
       ptp_kept_rate: createMetric("ptp_kept_rate", "PTP Kept %", 0.731, "percent"),
       contact_rate: createMetric("contact_rate", "Contact Rate", 0.756, "percent"),
-      dpd_30_plus_concentration: createMetric("dpd_30_plus_concentration", "30+ DPD Portfolio Concentration", 0.165, "percent"),
+      dpd_30_plus_concentration: createMetric(
+        "dpd_30_plus_concentration",
+        "30+ DPD Portfolio Concentration",
+        0.165,
+        "percent",
+      ),
     },
   },
 ];
@@ -176,7 +281,10 @@ export function getMockBranchOverview(branchId: number, asOfDate?: string): Bran
   };
 }
 
-export function getMockBranchPerformance(branchId: number, asOfDate?: string): BranchPerformanceResponse {
+export function getMockBranchPerformance(
+  branchId: number,
+  asOfDate?: string,
+): BranchPerformanceResponse {
   const branch = MOCK_BRANCHES_DATA.find((b) => b.id === branchId) ?? MOCK_BRANCHES_DATA[0];
   return {
     data: {
@@ -305,7 +413,8 @@ export function getMockBranchInsights(asOfDate?: string): BranchInsightsResponse
     data: [
       {
         id: 1,
-        narrative: "Collection efficiency outperformed peer network average by +7.0 pts driven by early contact cadence on Days 1-3.",
+        narrative:
+          "Collection efficiency outperformed peer network average by +7.0 pts driven by early contact cadence on Days 1-3.",
         evidence: [
           {
             metricCode: "collection_efficiency",
@@ -320,7 +429,8 @@ export function getMockBranchInsights(asOfDate?: string): BranchInsightsResponse
       },
       {
         id: 2,
-        narrative: "Borrower contact rate is healthy across early delinquency cohorts, minimizing rollover into 60+ DPD buckets.",
+        narrative:
+          "Borrower contact rate is healthy across early delinquency cohorts, minimizing rollover into 60+ DPD buckets.",
         evidence: [
           {
             metricCode: "contact_rate",
@@ -344,7 +454,8 @@ export function getMockBranchInsights(asOfDate?: string): BranchInsightsResponse
 export function getMockBranchComparisonAI(branchId: number): BranchComparisonAIResponse {
   return {
     data: {
-      narrative: "Branch performance is strong in early outreach and recovery resolution velocity compared to network benchmarks.",
+      narrative:
+        "Branch performance is strong in early outreach and recovery resolution velocity compared to network benchmarks.",
       strengths: [
         "Faster average days to resolution (17.5d vs 21.6d network avg)",
         "Above average PTP fulfillment rate (79.2% vs 73.2%)",
@@ -416,7 +527,8 @@ export function getMockSelectedKpiAI(branchId: number, kpiCode?: string): Select
 export function getMockOverallBranchAI(branchId: number): OverallBranchAIResponse {
   return {
     data: {
-      narrative: "Overall branch operational diagnostics indicate top-tier recovery performance with controlled delinquency rollover.",
+      narrative:
+        "Overall branch operational diagnostics indicate top-tier recovery performance with controlled delinquency rollover.",
       evidence: [
         {
           metricCode: "collection_efficiency",
@@ -438,4 +550,3 @@ export function getMockOverallBranchAI(branchId: number): OverallBranchAIRespons
     },
   };
 }
-

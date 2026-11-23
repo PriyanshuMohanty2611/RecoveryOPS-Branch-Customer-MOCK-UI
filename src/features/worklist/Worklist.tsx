@@ -1,5 +1,6 @@
 import { Link, useRouterState, useNavigate } from "@tanstack/react-router";
 import { useState, useMemo, useEffect } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { AppShell } from "@/components/app-shell";
 import {
   CUSTOMERS,
@@ -10,6 +11,8 @@ import {
   setStoredCustomerBranch,
   type CustomerData,
 } from "@/data/customer-nba-data";
+import { api } from "@/lib/api";
+import { useDate } from "@/hooks/date-context";
 import {
   Building2,
   X,
@@ -76,11 +79,24 @@ function getDpdBucketInfo(dpd: number) {
       order: 4,
     };
   }
+  if (dpd >= 61) {
+    return {
+      bucketName: "Bucket 4",
+      bucketRange: "61–89 DPD",
+      tier: "61–89",
+      badgeClass:
+        "bg-orange-500/15 border border-orange-500/40 text-orange-600 dark:text-orange-400",
+      dotColor: "bg-orange-500",
+      dotPing: "bg-orange-400",
+      tagClass: "bg-orange-500/15 text-orange-600 dark:text-orange-400 border border-orange-500/30",
+      order: 4,
+    };
+  }
   if (dpd >= 31) {
     return {
       bucketName: "Bucket 3",
-      bucketRange: "30–60 DPD",
-      tier: "30–60",
+      bucketRange: "31–60 DPD",
+      tier: "31–60",
       badgeClass: "bg-amber-500/15 border border-amber-500/40 text-amber-600 dark:text-amber-400",
       dotColor: "bg-amber-500",
       dotPing: "bg-amber-400",
@@ -93,10 +109,12 @@ function getDpdBucketInfo(dpd: number) {
       bucketName: "Bucket 2",
       bucketRange: "1–30 DPD",
       tier: "1–30",
-      badgeClass: "bg-emerald-500/15 border border-emerald-500/40 text-emerald-600 dark:text-emerald-400",
+      badgeClass:
+        "bg-emerald-500/15 border border-emerald-500/40 text-emerald-600 dark:text-emerald-400",
       dotColor: "bg-emerald-500",
       dotPing: "bg-emerald-400",
-      tagClass: "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30",
+      tagClass:
+        "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30",
       order: 2,
     };
   }
@@ -115,7 +133,7 @@ function getDpdBucketInfo(dpd: number) {
 export function Worklist() {
   const navigate = useNavigate();
   const searchParams = useRouterState({
-    select: (s) => (s.location.search as Record<string, string | undefined>),
+    select: (s) => s.location.search as Record<string, string | undefined>,
   });
 
   const urlBranch = searchParams?.["branch"];
@@ -126,6 +144,16 @@ export function Worklist() {
   const [priorityFilter, setPriorityFilter] = useState<string>("All");
   const [channelFilter, setChannelFilter] = useState<string>("All");
   const [searchQuery, setSearchQuery] = useState<string>("");
+  const { selectedDate } = useDate();
+  const worklistQuery = useQuery({
+    queryKey: ["customer-worklist", selectedBranchCode, selectedDate],
+    queryFn: () =>
+      api.getCustomerWorklist(
+        selectedBranchCode === "All" ? undefined : selectedBranchCode,
+        undefined,
+        selectedDate,
+      ),
+  });
 
   // Sync state if URL changes
   useEffect(() => {
@@ -149,17 +177,20 @@ export function Worklist() {
   };
 
   const branchMeta =
-    selectedBranchCode && selectedBranchCode !== "All"
-      ? BRANCH_METADATA[selectedBranchCode]
-      : null;
+    selectedBranchCode && selectedBranchCode !== "All" ? BRANCH_METADATA[selectedBranchCode] : null;
 
-  // Base list filtered by active branch
+  const liveCustomers = worklistQuery.data?.data;
+
+  // Base list filtered by active branch (uses live backend data when available)
   const baseCustomers = useMemo(() => {
+    if (liveCustomers && liveCustomers.length > 0) {
+      return liveCustomers;
+    }
     if (selectedBranchCode && selectedBranchCode !== "All") {
       return CUSTOMERS.filter((c) => c.br === selectedBranchCode);
     }
     return CUSTOMERS;
-  }, [selectedBranchCode]);
+  }, [liveCustomers, selectedBranchCode]);
 
   // Secondary filters applied on top of branch base list
   // Sorted strictly by DPD Bucket priority (90+ -> 30-60 -> 1-30 -> Current), then highest DPD
@@ -195,7 +226,8 @@ export function Worklist() {
       All: subset.length,
       Current: subset.filter((c) => c.dpd === 0).length,
       "1–30": subset.filter((c) => c.dpd >= 1 && c.dpd <= 30).length,
-      "30–60": subset.filter((c) => c.dpd >= 31 && c.dpd <= 60).length,
+      "31–60": subset.filter((c) => c.dpd >= 31 && c.dpd <= 60).length,
+      "61–89": subset.filter((c) => c.dpd >= 61 && c.dpd <= 89).length,
       "90+": subset.filter((c) => c.dpd >= 90).length,
     };
   }, [baseCustomers, channelFilter]);
@@ -233,22 +265,28 @@ export function Worklist() {
   // 4 DPD Bucket Distribution Statistics: Current, 1-30, 30-60, 90+
   const bCurrentCount = activeForBuckets.filter((c) => c.dpd === 0).length; // Current
   const b1Count = activeForBuckets.filter((c) => c.dpd >= 1 && c.dpd <= 30).length; // 1-30 DPD
-  const b2Count = activeForBuckets.filter((c) => c.dpd >= 31 && c.dpd <= 60).length; // 30-60 DPD
+  const b2Count = activeForBuckets.filter((c) => c.dpd >= 31 && c.dpd <= 60).length; // 31-60 DPD
+  const b3Count = activeForBuckets.filter((c) => c.dpd >= 61 && c.dpd <= 89).length; // 61-89 DPD
   const b90Count = activeForBuckets.filter((c) => c.dpd >= 90).length; // 90+ DPD
   const totalInQueue = activeForBuckets.length || 1;
 
   const bCurrentPct = Math.round((bCurrentCount / totalInQueue) * 100);
   const b1Pct = Math.round((b1Count / totalInQueue) * 100);
   const b2Pct = Math.round((b2Count / totalInQueue) * 100);
+  const b3Pct = Math.round((b3Count / totalInQueue) * 100);
   const b90Pct = Math.round((b90Count / totalInQueue) * 100);
 
   // Pie chart distribution dataset for DPD buckets (scales dynamically for real-time high volume)
-  const bucketPieData = useMemo(() => [
-    { name: "Current (0 DPD)", count: bCurrentCount, pct: bCurrentPct, color: "#0284c7" },
-    { name: "1–30d Early", count: b1Count, pct: b1Pct, color: "#10b981" },
-    { name: "30–60d Mid", count: b2Count, pct: b2Pct, color: "#f59e0b" },
-    { name: "90+d Late", count: b90Count, pct: b90Pct, color: "#f43f5e" },
-  ], [bCurrentCount, bCurrentPct, b1Count, b1Pct, b2Count, b2Pct, b90Count, b90Pct]);
+  const bucketPieData = useMemo(
+    () => [
+      { name: "Current (0 DPD)", count: bCurrentCount, pct: bCurrentPct, color: "#0284c7" },
+      { name: "1–30d Early", count: b1Count, pct: b1Pct, color: "#10b981" },
+      { name: "30–60d Mid", count: b2Count, pct: b2Pct, color: "#f59e0b" },
+      { name: "61–89d Advanced", count: b3Count, pct: b3Pct, color: "#f97316" },
+      { name: "90+d Late", count: b90Count, pct: b90Pct, color: "#f43f5e" },
+    ],
+    [bCurrentCount, bCurrentPct, b1Count, b1Pct, b2Count, b2Pct, b3Count, b3Pct, b90Count, b90Pct],
+  );
 
   // Total amount of active queue
   const totalAmount = useMemo(() => {
@@ -262,6 +300,21 @@ export function Worklist() {
     const basePct = Math.round((compliant / baseCustomers.length) * 100);
     return Math.min(95, Math.max(72, basePct > 0 ? basePct : 82));
   }, [baseCustomers]);
+
+  if (worklistQuery.isLoading) {
+    return (
+      <AppShell title="Priority Worklist" section="Customer Level">
+        <div className="p-8 text-sm text-muted-foreground">Loading priority worklist...</div>
+      </AppShell>
+    );
+  }
+  if (worklistQuery.isError) {
+    return (
+      <AppShell title="Priority Worklist" section="Customer Level">
+        <div className="p-8 text-sm text-destructive">Unable to load priority worklist.</div>
+      </AppShell>
+    );
+  }
 
   return (
     <AppShell
@@ -278,7 +331,7 @@ export function Worklist() {
               onChange={(e) => handleBranchSelect(e.target.value)}
               className="bg-transparent text-xs font-semibold text-foreground focus:outline-none cursor-pointer"
             >
-              <option value="All">All Branches ({CUSTOMERS.length} Borrowers)</option>
+              <option value="All">All Branches ({baseCustomers.length} Borrowers)</option>
               {ALL_BRANCH_CODES.map((code) => (
                 <option key={code} value={code}>
                   Branch {code} — {BRANCH_METADATA[code]?.name}
@@ -306,7 +359,8 @@ export function Worklist() {
                   {branchMeta.name} — Customer Priority Worklist
                 </h1>
                 <p className="text-xs sm:text-sm text-white/90 font-medium">
-                  Prioritized customer list with integrated Next Best Actions across Content, Cadence & Channel.
+                  Prioritized customer list with integrated Next Best Actions across Content,
+                  Cadence & Channel.
                 </p>
               </div>
 
@@ -351,9 +405,7 @@ export function Worklist() {
                 <span className="text-3xl sm:text-4xl font-black bg-gradient-to-r from-violet-600 to-pink-600 bg-clip-text text-transparent">
                   {baseCustomers.length}
                 </span>
-                <span className="text-xs font-bold text-foreground">
-                  Borrowers
-                </span>
+                <span className="text-xs font-bold text-foreground">Borrowers</span>
               </div>
             </div>
 
@@ -404,13 +456,16 @@ export function Worklist() {
                   <PieChart>
                     <RechartsTooltip
                       content={({ active, payload }) => {
-                        if (active && payload && payload.length) {
+                        if (active && payload && payload.length && payload[0]?.payload) {
                           const data = payload[0].payload;
                           return (
                             <div className="rounded-lg border border-border/80 bg-popover px-2.5 py-1.5 text-xs shadow-md z-30">
-                              <span className="font-bold text-foreground block text-[11px]">{data.name}</span>
+                              <span className="font-bold text-foreground block text-[11px]">
+                                {data.name}
+                              </span>
                               <span className="text-muted-foreground text-[10.5px]">
-                                <b className="text-foreground">{data.count.toLocaleString()}</b> borrowers ({data.pct}%)
+                                <b className="text-foreground">{data.count.toLocaleString()}</b>{" "}
+                                borrowers ({data.pct}%)
                               </span>
                             </div>
                           );
@@ -444,8 +499,12 @@ export function Worklist() {
                 </ResponsiveContainer>
                 {/* Center Badge in Donut */}
                 <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
-                  <span className="text-xs font-black text-foreground leading-none">{totalInQueue}</span>
-                  <span className="text-[8px] font-bold text-muted-foreground uppercase">Total</span>
+                  <span className="text-xs font-black text-foreground leading-none">
+                    {totalInQueue}
+                  </span>
+                  <span className="text-[8px] font-bold text-muted-foreground uppercase">
+                    Total
+                  </span>
                 </div>
               </div>
 
@@ -454,7 +513,10 @@ export function Worklist() {
                 {bucketPieData.map((item) => (
                   <div key={item.name} className="flex flex-col">
                     <div className="flex items-center gap-1 font-semibold text-foreground">
-                      <span className="size-2 rounded-full shrink-0" style={{ backgroundColor: item.color }} />
+                      <span
+                        className="size-2 rounded-full shrink-0"
+                        style={{ backgroundColor: item.color }}
+                      />
                       <span className="truncate">{item.name.split(" ")[0]}</span>
                     </div>
                     <span className="text-[9.5px] font-mono text-muted-foreground pl-3">
@@ -486,7 +548,9 @@ export function Worklist() {
               </div>
 
               <div className="mt-1 flex items-baseline gap-2">
-                <span className="text-3xl sm:text-4xl font-black text-foreground">{adoptionRate}%</span>
+                <span className="text-3xl sm:text-4xl font-black text-foreground">
+                  {adoptionRate}%
+                </span>
                 <span className="text-xs font-semibold text-emerald-600 dark:text-emerald-400">
                   Recommendation Adherence
                 </span>
@@ -510,7 +574,8 @@ export function Worklist() {
                 Prioritised Customer List
               </h2>
               <p className="text-xs text-muted-foreground mt-0.5">
-                Worklist prioritized according to DPD Buckets with integrated Content, Cadence & Channel actions.
+                Worklist prioritized according to DPD Buckets with integrated Content, Cadence &
+                Channel actions.
               </p>
             </div>
             <div className="flex items-center gap-3">
@@ -561,10 +626,36 @@ export function Worklist() {
               <div className="flex gap-1 rounded-xl border border-slate-400 dark:border-slate-600 bg-card p-1 shadow-2xs">
                 {[
                   { label: "All", count: priorityCounts["All"], color: "", title: "All Accounts" },
-                  { label: "Current", count: priorityCounts["Current"], color: "bg-sky-500", title: "Current (0 DPD)" },
-                  { label: "1–30", count: priorityCounts["1–30"], color: "bg-emerald-500", title: "1–30 DPD" },
-                  { label: "30–60", count: priorityCounts["30–60"], color: "bg-amber-500", title: "30–60 DPD" },
-                  { label: "90+", count: priorityCounts["90+"], color: "bg-rose-500", title: "90+ DPD" },
+                  {
+                    label: "Current",
+                    count: priorityCounts["Current"],
+                    color: "bg-sky-500",
+                    title: "Current (0 DPD)",
+                  },
+                  {
+                    label: "1–30",
+                    count: priorityCounts["1–30"],
+                    color: "bg-emerald-500",
+                    title: "1–30 DPD",
+                  },
+                  {
+                    label: "31–60",
+                    count: priorityCounts["31–60"],
+                    color: "bg-amber-500",
+                    title: "31–60 DPD",
+                  },
+                  {
+                    label: "61–89",
+                    count: priorityCounts["61–89"],
+                    color: "bg-orange-500",
+                    title: "61–89 DPD",
+                  },
+                  {
+                    label: "90+",
+                    count: priorityCounts["90+"],
+                    color: "bg-rose-500",
+                    title: "90+ DPD",
+                  },
                 ].map(({ label, count, color, title }) => (
                   <button
                     key={label}
@@ -662,7 +753,10 @@ export function Worklist() {
                         </p>
                         <div className="mt-1.5 space-y-0.5">
                           {ch.options.map((opt) => (
-                            <div key={opt} className="flex items-center gap-1 text-[10.5px] text-foreground font-semibold">
+                            <div
+                              key={opt}
+                              className="flex items-center gap-1 text-[10.5px] text-foreground font-semibold"
+                            >
                               <span className="size-1 rounded-full bg-primary" />
                               {opt}
                             </div>
@@ -685,7 +779,12 @@ export function Worklist() {
 
                   {priorityFilter !== "All" && (
                     <span className="inline-flex items-center gap-1.5 rounded-lg bg-gradient-to-r from-violet-600/15 to-pink-600/15 border border-violet-500/40 px-2.5 py-1 text-xs font-bold text-foreground shadow-2xs">
-                      <span>Priority: <strong className="text-violet-600 dark:text-violet-400">{priorityFilter} DPD</strong></span>
+                      <span>
+                        Priority:{" "}
+                        <strong className="text-violet-600 dark:text-violet-400">
+                          {priorityFilter} DPD
+                        </strong>
+                      </span>
                       <button
                         type="button"
                         onClick={() => setPriorityFilter("All")}
@@ -699,7 +798,12 @@ export function Worklist() {
 
                   {channelFilter !== "All" && (
                     <span className="inline-flex items-center gap-1.5 rounded-lg bg-gradient-to-r from-violet-600/15 to-pink-600/15 border border-violet-500/40 px-2.5 py-1 text-xs font-bold text-foreground shadow-2xs">
-                      <span>Channel: <strong className="text-violet-600 dark:text-violet-400">{channelFilter}</strong></span>
+                      <span>
+                        Channel:{" "}
+                        <strong className="text-violet-600 dark:text-violet-400">
+                          {channelFilter}
+                        </strong>
+                      </span>
                       <button
                         type="button"
                         onClick={() => setChannelFilter("All")}
@@ -713,7 +817,9 @@ export function Worklist() {
 
                   {searchQuery && (
                     <span className="inline-flex items-center gap-1.5 rounded-lg bg-muted border border-border px-2.5 py-1 text-xs font-bold text-foreground shadow-2xs">
-                      <span>Search: <strong className="text-foreground">"{searchQuery}"</strong></span>
+                      <span>
+                        Search: <strong className="text-foreground">"{searchQuery}"</strong>
+                      </span>
                       <button
                         type="button"
                         onClick={() => setSearchQuery("")}
@@ -747,19 +853,26 @@ export function Worklist() {
               <thead>
                 <tr className="border-b border-slate-400/80 dark:border-slate-600 text-[10.5px] uppercase tracking-wider text-muted-foreground bg-muted/40">
                   <th className="px-4 py-3 font-bold align-middle w-12 text-center">Rank</th>
-                  <th className="px-4 py-3 font-bold align-middle min-w-[180px]">Customer &amp; Account</th>
+                  <th className="px-4 py-3 font-bold align-middle min-w-[180px]">
+                    Customer &amp; Account
+                  </th>
                   <th className="px-4 py-3 font-bold align-middle min-w-[160px]">Priority</th>
                   <th className="px-4 py-3 font-bold align-middle min-w-[220px]">Content</th>
                   <th className="px-4 py-3 font-bold align-middle min-w-[110px]">Cadence</th>
                   <th className="px-4 py-3 font-bold align-middle min-w-[130px]">Channel</th>
-                  <th className="px-4 py-3 font-bold align-middle min-w-[160px]">Due Amount wrt to days</th>
+                  <th className="px-4 py-3 font-bold align-middle min-w-[160px]">
+                    Due Amount wrt to days
+                  </th>
                   <th className="px-4 py-3 text-right font-bold align-middle w-32">Action</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-300/70 dark:divide-slate-700 bg-card">
                 {filteredCustomers.length === 0 ? (
                   <tr>
-                    <td colSpan={8} className="p-8 text-center text-xs text-muted-foreground align-middle">
+                    <td
+                      colSpan={8}
+                      className="p-8 text-center text-xs text-muted-foreground align-middle"
+                    >
                       No borrowers match the current search or filters.
                     </td>
                   </tr>
@@ -767,7 +880,8 @@ export function Worklist() {
                   filteredCustomers.map((c, i) => {
                     const bucket = getDpdBucketInfo(c.dpd);
                     const simpleChannelKey = getSimpleChannel(bestTouchpoint(c));
-                    const chConfig = CHANNELS.find((ch) => ch.key === simpleChannelKey) || CHANNELS[0]!;
+                    const chConfig =
+                      CHANNELS.find((ch) => ch.key === simpleChannelKey) || CHANNELS[0]!;
                     const ChannelIcon = chConfig.icon;
 
                     return (
@@ -795,13 +909,19 @@ export function Worklist() {
                         <td className="px-4 py-3.5 align-middle">
                           <div className="inline-flex items-center gap-2 rounded-xl bg-slate-100 dark:bg-slate-800/80 border border-slate-300 dark:border-slate-700 px-2.5 py-1.5 shadow-2xs">
                             <span className="relative flex size-2 shrink-0">
-                              <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${bucket.dotPing}`} />
-                              <span className={`relative inline-flex rounded-full size-2 ${bucket.dotColor}`} />
+                              <span
+                                className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${bucket.dotPing}`}
+                              />
+                              <span
+                                className={`relative inline-flex rounded-full size-2 ${bucket.dotColor}`}
+                              />
                             </span>
                             <span className="font-extrabold text-foreground text-xs tracking-tight whitespace-nowrap">
                               {bucket.bucketRange}
                             </span>
-                            <span className={`text-[9.5px] font-bold px-1.5 py-0.2 rounded-md whitespace-nowrap ${bucket.tagClass}`}>
+                            <span
+                              className={`text-[9.5px] font-bold px-1.5 py-0.2 rounded-md whitespace-nowrap ${bucket.tagClass}`}
+                            >
                               {bucket.bucketName}
                             </span>
                           </div>
@@ -835,7 +955,7 @@ export function Worklist() {
                               </div>
                               <div className="space-y-1">
                                 {chConfig.options.map((opt) => (
-                                   <div
+                                  <div
                                     key={opt}
                                     className="px-1.5 py-0.5 rounded-md hover:bg-muted text-foreground font-medium flex items-center justify-between cursor-pointer"
                                   >

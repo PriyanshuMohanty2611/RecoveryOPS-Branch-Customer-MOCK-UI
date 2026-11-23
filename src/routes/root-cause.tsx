@@ -1412,5 +1412,3 @@ function BranchRootCauseContent({
     </AppShell>
   );
 }
-
-export default RootCauseRoute;

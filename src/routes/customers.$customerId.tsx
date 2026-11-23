@@ -1,5 +1,6 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useState, useEffect } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
   ArrowLeft,
@@ -8,7 +9,6 @@ import {
   X,
   Clock,
   Sliders,
-  MessageSquare,
   Mail,
   Smartphone,
   MapPin,
@@ -23,11 +23,9 @@ import {
   Sparkles,
   AlertTriangle,
   Copy,
-  ChevronRight,
   ChevronDown,
   ChevronUp,
   Calendar,
-  AlertCircle,
   ClipboardCheck,
   DollarSign,
   Wallet,
@@ -35,14 +33,132 @@ import {
   Edit3,
   PlusCircle,
   UserCheck,
-  BadgeCheck,
   User,
+  BadgeCheck,
+  CalendarClock,
+  Ban,
 } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
-import { AnimatedKpi } from "@/components/ui/animated-kpi";
 import { InfoTooltip } from "@/components/ui/info-tooltip";
+import { AnimatedKpi } from "@/components/ui/animated-kpi";
 import { CUSTOMERS, bestTouchpoint, type CustomerData } from "@/data/customer-nba-data";
 import { getCustomerDetailContext } from "@/data/mock-data";
+import { api, type CustomerTimelineItem, type NbaRecommendation } from "@/lib/api";
+import {
+  buildBusinessNbaPresentation,
+  formatValidationToastMessage,
+  getActionSpecificOutcomes,
+  getBusinessActionMeta,
+  type ActionOutcomePreset,
+} from "@/lib/nba-business-presenter";
+import { OutcomeProvider } from "@/hooks/outcome-context";
+import { useSelectedTimelineOutcome } from "@/hooks/use-selected-timeline-outcome";
+import { outcomeToFeedbackFlags, parseTimelineOutcome } from "@/lib/outcome-parsers";
+
+const NBA_ACTION_ORDER = [
+  "ACT_PHONE_STANDARD",
+  "ACT_PHONE_INTENSIVE",
+  "ACT_DIGITAL_REMINDER_EMAIL",
+  "ACT_FIELD_VISIT_STANDARD",
+  "ACT_FIELD_VISIT_INTENSIVE",
+  "ACT_DIGITAL_REMINDER_SMS",
+  "ACT_DISCOUNT_SETTLEMENT",
+  "ACT_LEGAL_WARNING",
+] as const;
+
+const NBA_ACTION_META: Record<
+  string,
+  { label: string; channelCode: string; channelLabel: string; legacyName: string }
+> = {
+  ACT_PHONE_STANDARD: {
+    label: "Call Customer",
+    channelCode: "PHONE",
+    channelLabel: "Phone Call",
+    legacyName: "Phone calls",
+  },
+  ACT_PHONE_INTENSIVE: {
+    label: "Call Customer",
+    channelCode: "PHONE",
+    channelLabel: "Phone Call",
+    legacyName: "Phone calls",
+  },
+  ACT_DIGITAL_REMINDER_EMAIL: {
+    label: "Send Email Reminder",
+    channelCode: "EMAIL",
+    channelLabel: "Email",
+    legacyName: "Mails",
+  },
+  ACT_DIGITAL_REMINDER_SMS: {
+    label: "Send SMS Reminder",
+    channelCode: "SMS",
+    channelLabel: "SMS",
+    legacyName: "Mails",
+  },
+  ACT_FIELD_VISIT_STANDARD: {
+    label: "Field Visit",
+    channelCode: "FIELD_VISIT",
+    channelLabel: "Field Visit",
+    legacyName: "Field Visit",
+  },
+  ACT_FIELD_VISIT_INTENSIVE: {
+    label: "Field Visit",
+    channelCode: "FIELD_VISIT",
+    channelLabel: "Field Visit",
+    legacyName: "Field Visit",
+  },
+  ACT_DISCOUNT_SETTLEMENT: {
+    label: "Offer Settlement Discount",
+    channelCode: "EMAIL",
+    channelLabel: "Email",
+    legacyName: "Mails",
+  },
+  ACT_LEGAL_WARNING: {
+    label: "Issue Legal Warning",
+    channelCode: "EMAIL",
+    channelLabel: "Email",
+    legacyName: "Mails",
+  },
+  ACT_HOLD_SUPPRESS: {
+    label: "Hold / Suppress Contact",
+    channelCode: "HOLD",
+    channelLabel: "Hold / Suppress",
+    legacyName: "Hold",
+  },
+};
+
+function formatTimelineDate(value: string): string {
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return value;
+  return d.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+}
+
+function resolveArmForFeedbackChannel(
+  channel: "FIELD" | "PHONE" | "MAIL",
+  nba: NbaRecommendation | undefined,
+): string {
+  const rec = nba?.recommendedAction ?? "";
+  const elig = nba?.eligibleArms ?? [];
+  if (channel === "PHONE") {
+    if (rec.startsWith("ACT_PHONE_") && elig.includes(rec)) return rec;
+    const found = elig.find((a) => a.startsWith("ACT_PHONE_"));
+    return found ?? "ACT_PHONE_STANDARD";
+  }
+  if (channel === "FIELD") {
+    if (rec.startsWith("ACT_FIELD_VISIT_") && elig.includes(rec)) return rec;
+    const found = elig.find((a) => a.startsWith("ACT_FIELD_VISIT_"));
+    return found ?? "ACT_FIELD_VISIT_STANDARD";
+  }
+  if (
+    (rec === "ACT_DIGITAL_REMINDER_EMAIL" || rec === "ACT_DIGITAL_REMINDER_SMS") &&
+    elig.includes(rec)
+  ) {
+    return rec;
+  }
+  const found = elig.find(
+    (a) => a === "ACT_DIGITAL_REMINDER_EMAIL" || a === "ACT_DIGITAL_REMINDER_SMS",
+  );
+  return found ?? "ACT_DIGITAL_REMINDER_EMAIL";
+}
 
 export const Route = createFileRoute("/customers/$customerId")({
   head: () => ({
@@ -58,40 +174,116 @@ export const Route = createFileRoute("/customers/$customerId")({
 });
 
 function CustomerDetailView() {
+  return (
+    <OutcomeProvider>
+      <CustomerDetailWorkspace />
+    </OutcomeProvider>
+  );
+}
+
+function CustomerDetailWorkspace() {
   const { customerId } = Route.useParams();
-  const c = CUSTOMERS.find((x) => x.id === customerId) || CUSTOMERS[0]!;
+  const queryClient = useQueryClient();
+  const { selectedTimelineOutcome, setSelectedTimelineOutcome } = useSelectedTimelineOutcome();
+  const fallbackCustomer = CUSTOMERS.find((x) => x.id === customerId) || CUSTOMERS[0]!;
+
+  const { data: detailData } = useQuery({
+    queryKey: ["customer-detail", customerId],
+    queryFn: () => api.getCustomerDetail(customerId),
+    staleTime: 30_000,
+  });
+
+  const nbaQuery = useQuery({
+    queryKey: ["customer-nba", customerId],
+    queryFn: () => api.getCustomerNba(customerId),
+    staleTime: 30_000,
+  });
+
+  const liveAccounts = detailData?.data?.accounts ?? [];
+  const nbaAccounts = nbaQuery.data?.data?.accounts ?? [];
+
+  const activeAccountId =
+    nbaQuery.data?.data?.defaultAccountId ??
+    liveAccounts.find((a) => a.accountStatus === "ACTIVE")?.accountId ??
+    liveAccounts[0]?.accountId ??
+    null;
+
+  const timelineQuery = useQuery({
+    queryKey: ["customer-timeline", customerId, activeAccountId],
+    queryFn: () => api.getCustomerTimeline(customerId, activeAccountId),
+    staleTime: 30_000,
+  });
+
+  const liveCustomer =
+    (activeAccountId != null
+      ? liveAccounts.find((a) => a.accountId === activeAccountId)
+      : undefined) ?? detailData?.data?.customer;
+  const c: CustomerData = liveCustomer
+    ? { ...fallbackCustomer, ...liveCustomer }
+    : fallbackCustomer;
+  const activeNba: NbaRecommendation | undefined =
+    (activeAccountId != null
+      ? nbaAccounts.find((a) => a.accountId === activeAccountId)
+      : undefined) ?? nbaAccounts[0];
+
+  const outreachQuery = useQuery({
+    queryKey: ["customer-outreach-stats", c.id, activeAccountId],
+    queryFn: () => api.getCustomerOutreachStats(c.id, activeAccountId),
+    staleTime: 30000,
+  });
+  const outreachStats = outreachQuery.data?.data;
 
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [selectedOutcome, setSelectedOutcome] = useState("Connected");
-  const [ptpAmount, setPtpAmount] = useState("$1,200");
-  const [ptpDate, setPtpDate] = useState("2026-11-05");
-  const [notes, setNotes] = useState("Agreed to cure partial balance.");
 
-  // Outreach Model state
-  const [outreachDrawerOpen, setOutreachDrawerOpen] = useState(false);
-  const [collectorStatus, setCollectorStatus] = useState<"PENDING" | "APPROVED" | "EDITED" | "REJECTED">("PENDING");
+  // Outreach Model & NBA decision state
+  const [collectorStatus, setCollectorStatus] = useState<
+    "PENDING" | "APPROVED" | "EDITED" | "REJECTED"
+  >("PENDING");
   const [overrideChannel, setOverrideChannel] = useState<string | null>(null);
-  const [showOverrideMenu, setShowOverrideMenu] = useState(false);
+  const [overrideActionCode, setOverrideActionCode] = useState<string | null>(null);
+  const [copiedSnippet, setCopiedSnippet] = useState(false);
+  const [explanationOpen, setExplanationOpen] = useState(false);
+  const [otherActionsOpen, setOtherActionsOpen] = useState(false);
+  const [selectedOutcomePresetId, setSelectedOutcomePresetId] = useState<string>("");
 
   // NBA Modal states
   const [rejectionModalOpen, setRejectionModalOpen] = useState(false);
   const [rejectionReason, setRejectionReason] = useState("Customer Requested Hardship Pause");
   const [rejectionNotes, setRejectionNotes] = useState("");
   const [changeChannelModalOpen, setChangeChannelModalOpen] = useState(false);
-  const [selectedChannelChoice, setSelectedChannelChoice] = useState<string>("Phone calls");
-  const [selectedTimingWindow, setSelectedTimingWindow] = useState<string>(c.rsp || "10:00 AM – 12:30 PM");
+  const [selectedArmChoice, setSelectedArmChoice] = useState<string>("ACT_PHONE_STANDARD");
+  const [selectedTimingWindow, setSelectedTimingWindow] = useState<string>("10:00 AM – 12:30 PM");
 
+  // Authoritative Backend Statistical Metrics & Policy Guard
+  const pastDueAmt = liveCustomer?.pastDueAmount ?? activeNba?.pastDueAmount ?? c.exp;
+  const remainingBal = liveCustomer?.remainingBalance ?? activeNba?.remainingBalance ?? c.exp;
+  const hasBalanceData =
+    liveCustomer?.remainingBalance != null || activeNba?.remainingBalance != null;
+  const overdueShare =
+    hasBalanceData && remainingBal > 0 ? Math.round((pastDueAmt / remainingBal) * 100) : null;
 
-  // Operational Review Drawer selection states
-  const [drawerSelectedChannel, setDrawerSelectedChannel] = useState<string>(c.ch[0]?.[0] || "Phone calls");
-  const [drawerSelectedTime, setDrawerSelectedTime] = useState<string>(c.rsp || "10:00 AM – 12:30 PM");
-  const [drawerObjective, setDrawerObjective] = useState<string>("Immediate Partial Cure");
+  const phoneStats = outreachStats?.channels.find((ch) => ch.channelCode === "PHONE");
+  const emailStats = outreachStats?.channels.find((ch) => ch.channelCode === "EMAIL");
+  const fieldStats = outreachStats?.channels.find((ch) => ch.channelCode === "FIELD_VISIT");
 
-  // Compute Outreach metrics strictly following LLD & Database Design Document
-  // Proposed scoring formula: channel_score = (0.600 * contact_success_rate) + (0.400 * response_rate)
-  const phoneSuccess = c.ch.find((x) => x[0] === "Phone calls" || x[0] === "Direct Phone")?.[1] || 68;
-  const emailSuccess = c.ch.find((x) => x[0] === "Mails" || x[0] === "Digital Mail")?.[1] || 42;
-  const fieldSuccess = c.ch.find((x) => x[0] === "Field Visit")?.[1] || (c.dpd >= 30 ? 85 : 0);
+  const fieldEligibleInNba = activeNba
+    ? activeNba.eligibilityStatus !== "SUPPRESSED_HOLD_FALLBACK" &&
+      (activeNba.eligibleArms.includes("ACT_FIELD_VISIT_STANDARD") ||
+        activeNba.eligibleArms.includes("ACT_FIELD_VISIT_INTENSIVE"))
+    : c.dpd >= 1 && pastDueAmt >= 500;
+
+  const phoneSuccess =
+    phoneStats?.csr ??
+    (c.ch.find((x) => x[0] === "Phone calls" || x[0] === "Direct Phone")?.[1] || 68);
+  const emailSuccess =
+    emailStats?.csr ?? (c.ch.find((x) => x[0] === "Mails" || x[0] === "Digital Mail")?.[1] || 42);
+  const fieldSuccess =
+    fieldStats?.csr ??
+    (c.ch.find((x) => x[0] === "Field Visit")?.[1] || (fieldEligibleInNba ? 85 : 0));
+
+  const phoneRR = phoneStats?.responseRate ?? Math.max(15, Math.round(c.reach * 0.9));
+  const emailRR = emailStats?.responseRate ?? Math.max(10, Math.round(c.reach * 0.6));
+  const fieldRR = fieldStats?.responseRate ?? Math.max(25, Math.round(c.reach * 0.95));
 
   const rawCandidates = [
     {
@@ -101,9 +293,16 @@ function CustomerDetailView() {
       actionTitle: "Call Customer",
       icon: Phone,
       successRate: phoneSuccess,
-      responseRate: Math.max(15, Math.round(c.reach * 0.9)),
-      permitted: true,
-      reason: "Available & Verified",
+      responseRate: phoneRR,
+      score:
+        phoneStats?.affinityScore != null
+          ? phoneStats.affinityScore
+          : Number((0.6 * phoneSuccess + 0.4 * phoneRR).toFixed(1)),
+      permitted: phoneStats ? phoneStats.isEligible : true,
+      reason: phoneStats?.restrictionReason || "Available & Verified",
+      csrRaw: phoneStats?.csr ?? null,
+      rrRaw: phoneStats?.responseRate ?? null,
+      affinityRaw: phoneStats?.affinityScore ?? null,
     },
     {
       code: "EMAIL" as const,
@@ -112,9 +311,16 @@ function CustomerDetailView() {
       actionTitle: "Send Email",
       icon: Mail,
       successRate: emailSuccess,
-      responseRate: Math.max(10, Math.round(c.reach * 0.6)),
-      permitted: true,
-      reason: "Available & Verified",
+      responseRate: emailRR,
+      score:
+        emailStats?.affinityScore != null
+          ? emailStats.affinityScore
+          : Number((0.6 * emailSuccess + 0.4 * emailRR).toFixed(1)),
+      permitted: emailStats ? emailStats.isEligible : true,
+      reason: emailStats?.restrictionReason || "Available & Verified",
+      csrRaw: emailStats?.csr ?? null,
+      rrRaw: emailStats?.responseRate ?? null,
+      affinityRaw: emailStats?.affinityScore ?? null,
     },
     {
       code: "FIELD" as const,
@@ -123,63 +329,146 @@ function CustomerDetailView() {
       actionTitle: "Field Visit",
       icon: MapPin,
       successRate: fieldSuccess,
-      responseRate: Math.max(25, Math.round(c.reach * 0.95)),
-      permitted: c.dpd >= 30,
-      reason: c.dpd >= 30 ? "High Priority Field Escalation" : "Requires 30+ DPD escalation policy",
+      responseRate: fieldRR,
+      score:
+        fieldStats?.affinityScore != null
+          ? fieldStats.affinityScore
+          : Number((0.6 * fieldSuccess + 0.4 * fieldRR).toFixed(1)),
+      permitted: fieldStats ? fieldStats.isEligible : fieldEligibleInNba,
+      reason:
+        fieldStats?.restrictionReason ||
+        (fieldEligibleInNba
+          ? "Available for Field Escalation"
+          : "Requires active overdue balance of $500+"),
+      csrRaw: fieldStats?.csr ?? null,
+      rrRaw: fieldStats?.responseRate ?? null,
+      affinityRaw: fieldStats?.affinityScore ?? null,
     },
   ];
 
   const rankedChannels = rawCandidates
     .map((item) => {
-      const baseScore = 0.6 * (item.successRate / 100) + 0.4 * (item.responseRate / 100);
-      const score = Number((item.permitted ? baseScore : baseScore * 0.5).toFixed(3));
-      return { ...item, score };
+      const baseScore = item.score;
+      const finalScore = Number((item.permitted ? baseScore : baseScore * 0.5).toFixed(1));
+      return { ...item, score: finalScore };
     })
     .sort((a, b) => b.score - a.score);
 
   const primaryRecommendation = rankedChannels[0]!;
   const activeChannel = overrideChannel
-    ? rankedChannels.find((r) => r.name === overrideChannel || r.label === overrideChannel || r.code === overrideChannel) || primaryRecommendation
+    ? rankedChannels.find(
+        (r) =>
+          r.name === overrideChannel || r.label === overrideChannel || r.code === overrideChannel,
+      ) || primaryRecommendation
     : primaryRecommendation;
 
+  // Bandit-backed Next Best Action metrics — strictly aligned with Outreach Statistical Model
+  const isHoldSuppressed = activeNba
+    ? activeNba.eligibilityStatus === "SUPPRESSED_HOLD_FALLBACK"
+    : false;
+
+  // Derive Outreach target channel to guarantee parity between Outreach card and NBA hero
+  const targetChannelCode: "PHONE" | "EMAIL" | "FIELD_VISIT" | "HOLD" =
+    isHoldSuppressed || outreachStats?.recommendationStatus === "SUPPRESSED_DNC"
+      ? "HOLD"
+      : outreachStats?.recommendedChannelCode
+        ? outreachStats.recommendedChannelCode === "FIELD_VISIT" ||
+          outreachStats.recommendedChannelCode === "FIELD"
+          ? "FIELD_VISIT"
+          : outreachStats.recommendedChannelCode === "EMAIL"
+            ? "EMAIL"
+            : "PHONE"
+        : activeChannel.code === "FIELD"
+          ? "FIELD_VISIT"
+          : activeChannel.code === "EMAIL"
+            ? "EMAIL"
+            : "PHONE";
+
+  let alignedActionCode = "ACT_PHONE_STANDARD";
+  if (targetChannelCode === "HOLD") {
+    alignedActionCode = "ACT_HOLD_SUPPRESS";
+  } else if (targetChannelCode === "EMAIL") {
+    const rec = activeNba?.recommendedAction;
+    alignedActionCode =
+      rec &&
+      (rec === "ACT_DIGITAL_REMINDER_EMAIL" ||
+        rec === "ACT_DISCOUNT_SETTLEMENT" ||
+        rec === "ACT_LEGAL_WARNING")
+        ? rec
+        : "ACT_DIGITAL_REMINDER_EMAIL";
+  } else if (targetChannelCode === "PHONE") {
+    const rec = activeNba?.recommendedAction;
+    alignedActionCode =
+      rec && (rec === "ACT_PHONE_STANDARD" || rec === "ACT_PHONE_INTENSIVE")
+        ? rec
+        : "ACT_PHONE_STANDARD";
+  } else if (targetChannelCode === "FIELD_VISIT") {
+    const rec = activeNba?.recommendedAction;
+    alignedActionCode =
+      rec && (rec === "ACT_FIELD_VISIT_STANDARD" || rec === "ACT_FIELD_VISIT_INTENSIVE")
+        ? rec
+        : "ACT_FIELD_VISIT_STANDARD";
+  }
+
+  const effectiveActionCode =
+    collectorStatus === "EDITED" && overrideActionCode ? overrideActionCode : alignedActionCode;
+  const activeNbaMeta = NBA_ACTION_META[effectiveActionCode];
+
+  const effectiveChannelCode = activeNbaMeta?.channelCode ?? targetChannelCode;
+
+  const NbaHeroIcon =
+    effectiveChannelCode === "PHONE"
+      ? Phone
+      : effectiveChannelCode === "FIELD_VISIT" || effectiveChannelCode === "FIELD"
+        ? MapPin
+        : effectiveChannelCode === "HOLD"
+          ? AlertTriangle
+          : Mail;
+
   const channelDisplayLabel =
-    activeChannel.code === "PHONE"
+    getBusinessActionMeta(effectiveActionCode).channelLabel ||
+    (effectiveChannelCode === "PHONE"
       ? "Phone Call"
-      : activeChannel.code === "EMAIL"
+      : effectiveChannelCode === "EMAIL"
         ? "Email"
-        : "Field Visit";
+        : effectiveChannelCode === "FIELD_VISIT" || effectiveChannelCode === "FIELD"
+          ? "Field Visit"
+          : "On Hold");
 
   const actionHeadline =
-    activeChannel.code === "PHONE"
+    getBusinessActionMeta(effectiveActionCode).cardTitle ||
+    activeNbaMeta?.label ||
+    (effectiveChannelCode === "PHONE"
       ? "Call Customer"
-      : activeChannel.code === "EMAIL"
+      : effectiveChannelCode === "EMAIL"
         ? "Send Email"
-        : "Field Visit";
+        : "Field Visit");
 
-  const totalAssignedTasks = c.touches + 3;
-  const respondedTasksCount = c.touches;
-  const pendingTasksCount = 3;
-  const responseCompletionRate = Math.round((respondedTasksCount / totalAssignedTasks) * 100);
+  // Hard Policy Gates checklist (reflects live account status, consent, DNC & bandit hold)
+  const effectiveAccountStatus =
+    liveCustomer?.accountStatus ?? activeNba?.accountStatus ?? "ACTIVE";
+  const isClosedAccount = effectiveAccountStatus !== "ACTIVE";
+  const hasConsent = liveCustomer ? liveCustomer.consent : true;
+  const isDnc = liveCustomer ? liveCustomer.doNotContact : false;
 
-  // Hard Policy Gates checklist
   const policyGates = [
     {
       name: "Account Eligibility",
-      rule: "Active delinquent status (DPD > 0)",
-      status: c.dpd > 0 ? "PASSED" : "BLOCKED",
-      detail: `${c.dpd} DPD · Stage ${c.dpd > 60 ? "Late" : "Early"}`,
+      rule: "Active delinquent status (ACTIVE & DPD > 0)",
+      status: !isClosedAccount && c.dpd > 0 ? "PASSED" : "BLOCKED",
+      detail: `${effectiveAccountStatus} · ${c.dpd} DPD · Stage ${c.dpd > 60 ? "Late" : c.dpd > 0 ? "Early" : "Current"}`,
     },
     {
       name: "Customer Permission",
       rule: "Consent active & DNC flag clear",
-      status: "PASSED",
-      detail: "Consent = TRUE · DNC = FALSE",
+      status: hasConsent && !isDnc ? "PASSED" : "BLOCKED",
+      detail: `Consent = ${hasConsent ? "TRUE" : "FALSE"} · DNC = ${isDnc ? "TRUE" : "FALSE"}`,
     },
     {
       name: "Channel Usability",
       rule: "Usable verified endpoint available",
-      status: "PASSED",
-      detail: "Validated phone & mobile details",
+      status: hasConsent ? "PASSED" : "BLOCKED",
+      detail: hasConsent ? "Validated phone & digital endpoints" : "Contact permission restricted",
     },
     {
       name: "Contact Window",
@@ -195,30 +484,104 @@ function CustomerDetailView() {
     },
     {
       name: "Frequency Cap",
-      rule: "Max 3 attempts per rolling 7-day window",
-      status: c.touches <= 4 ? "PASSED" : "CAP_WARNING",
-      detail: `${Math.min(c.touches, 3)}/3 attempts in rolling 7d`,
+      rule: "Max 4 outreach attempts / cap 2 field",
+      status: c.touches < 4 ? "PASSED" : "CAP_WARNING",
+      detail: `${c.touches}/4 recorded outreach touches`,
     },
   ];
 
-  const hasPolicyBlock = policyGates.some((g) => g.status === "BLOCKED");
-  const policyStatus = hasPolicyBlock ? "SUPPRESSED" : "ELIGIBLE";
-  const fallbackLevel = c.touches >= 3 ? "CUSTOMER" : "SEGMENT";
-  const dataCoverageStatus = c.touches >= 3 ? "SUFFICIENT_HISTORY" : "LIMITED_HISTORY";
-  const paymentSuccessRate =
-    c.pays > 0
-      ? Math.min(100, Math.round(c.cov * 0.7 + c.pays * 10))
-      : Math.min(30, Math.round(c.cov * 0.4));
+  const hasPolicyBlock = policyGates.some((g) => g.status === "BLOCKED") || isHoldSuppressed;
   const riskBucket =
     c.dpd >= 90
-      ? "Bucket 4 (90+ DPD)"
-      : c.dpd >= 31
-        ? "Bucket 3 (30–60 DPD)"
-        : c.dpd >= 1
-          ? "Bucket 2 (1–30 DPD)"
-          : "Bucket 1 (Current)";
+      ? "90+ DPD"
+      : c.dpd >= 61
+        ? "61–89 DPD"
+        : c.dpd >= 31
+          ? "31–60 DPD"
+          : c.dpd >= 1
+            ? "1–30 DPD"
+            : "Current";
 
-  const recoveredAmount = Math.round((c.exp * c.cov) / 100);
+  const outcomeDueBase = pastDueAmt > 0 ? pastDueAmt : remainingBal;
+  const recoveredAmount = Math.round(((pastDueAmt > 0 ? pastDueAmt : c.exp) * c.cov) / 100);
+
+  const OutreachHeroIcon =
+    outreachStats?.recommendedChannelCode === "FIELD_VISIT"
+      ? MapPin
+      : outreachStats?.recommendedChannelCode === "EMAIL"
+        ? Mail
+        : outreachStats?.recommendedChannelCode === "PHONE"
+          ? Phone
+          : activeChannel.icon;
+
+  // Link engagement rate: If response rate is recorded, link engagement must not be 0% due to missing/unseeded click data
+  const effectiveClick =
+    c.click > 0
+      ? c.click
+      : c.reach > 0
+        ? Math.min(c.open || 100, Math.max(c.reach, Math.round(c.reach * 1.5)))
+        : null;
+
+  // Discrete block progress bar helper (e.g. ▰▰▰▰▰▰▰▱▱▱) with color even for small values like 2%
+  const renderBlockBar = (
+    value: number | null | undefined,
+    colorClass = "text-primary",
+    total = 10,
+  ) => {
+    if (value == null || value <= 0) {
+      return (
+        <span className="font-mono text-[11px] tracking-tight text-muted-foreground/30 select-none">
+          {"▱".repeat(total)}
+        </span>
+      );
+    }
+    // For any positive rate (even 2%), show at least 1 filled block with color
+    const filled = Math.max(1, Math.min(total, Math.round((value / 100) * total)));
+    const empty = total - filled;
+    const isVeryLow = value < 8;
+    return (
+      <span className="font-mono text-[11px] tracking-tight select-none">
+        <span className={`${colorClass} font-bold ${isVeryLow ? "opacity-80" : ""}`}>
+          {"▰".repeat(filled)}
+        </span>
+        <span className="text-muted-foreground/25">{"▱".repeat(empty)}</span>
+      </span>
+    );
+  };
+
+  // Context-rich message copy/script snippet for Option 1 Live Preview
+  const templateName = c.content[0] || "Standard Delinquency Notice";
+  const templateLower = templateName.toLowerCase();
+  const formattedBalance = `$${pastDueAmt.toLocaleString()}`;
+  const isVoiceScript =
+    templateLower.includes("call") ||
+    templateLower.includes("script") ||
+    templateLower.includes("phone") ||
+    (!isHoldSuppressed && effectiveChannelCode === "PHONE" && !templateLower.includes("email"));
+
+  let liveSnippet = isVoiceScript
+    ? `Good day ${c.name}, calling from RecoveryOps regarding account ${c.acct}, which has an overdue balance of ${formattedBalance}. Can we review repayment options or set up a convenient payment today?`
+    : `Dear ${c.name}, your account ${c.acct} has an outstanding balance of ${formattedBalance}. Please review resolution options or settle your balance via our secure portal at portal.recoveryops.com/pay/${c.acct}.`;
+
+  if (templateLower.includes("final notice")) {
+    liveSnippet = isVoiceScript
+      ? `Good day ${c.name}, calling from RecoveryOps regarding account ${c.acct} with an overdue balance of ${formattedBalance} (${c.dpd} days overdue). Formal escalation is pending — can we arrange payment today or confirm a firm commitment?`
+      : `Dear ${c.name}, your account ${c.acct} has an overdue balance of ${formattedBalance} (${c.dpd} days overdue). Formal escalation is pending. Please use our secure portal link to review options or settle your balance today.`;
+  } else if (templateLower.includes("plan")) {
+    liveSnippet = isVoiceScript
+      ? `Good day ${c.name}, calling from RecoveryOps regarding account ${c.acct}. We have an approved relief payment plan to settle your balance of ${formattedBalance} in flexible installments. Can we confirm your eligibility today?`
+      : `Hello ${c.name}, an approved payment plan offer is active for account ${c.acct} (${formattedBalance}). Click to view your customized installment schedule.`;
+  } else if (templateLower.includes("broken") || templateLower.includes("re-engagement")) {
+    liveSnippet = isVoiceScript
+      ? `Good day ${c.name}, calling from RecoveryOps regarding account ${c.acct}. We noticed the scheduled payment of ${formattedBalance} was missed and want to help restructure a workable date today.`
+      : `Dear ${c.name}, we noted your scheduled commitment on account ${c.acct} for ${formattedBalance} was not fulfilled. Please connect with our frontline team today to restructure your repayment schedule.`;
+  } else if (templateLower.includes("courtesy") || templateLower.includes("reminder")) {
+    liveSnippet = isVoiceScript
+      ? `Hello ${c.name}, courtesy call from RecoveryOps regarding account ${c.acct}. A balance of ${formattedBalance} is due. Would you like me to send a direct one-click payment link to your mobile?`
+      : `Hello ${c.name}, friendly reminder that a payment of ${formattedBalance} for account ${c.acct} is due. Settle quickly and securely via: portal.recoveryops.com/pay/${c.acct}.`;
+  } else if (templateLower.includes("settlement")) {
+    liveSnippet = `Dear ${c.name}, an authorized settlement offer with partial waiver terms is available for account ${c.acct} (${formattedBalance}). Contact us before this window expires to secure formal terms.`;
+  }
 
   const dpdStatusLabel =
     c.dpd === 0
@@ -238,11 +601,17 @@ function CustomerDetailView() {
           ? "30–60 DPD Bracket"
           : "90+ DPD Charge-off Risk";
 
-  const detailContext = getCustomerDetailContext(c.id);
-  const trajectory = detailContext?.riskTrajectory;
-  const hasHistoricalDpd = Boolean(trajectory && typeof trajectory.delta30Dpd === "number");
-  const delta30Dpd = trajectory?.delta30Dpd ?? 0;
-  const d30Dpd = trajectory?.d30Dpd ?? c.dpd;
+  const isLiveDetail = Boolean(detailData?.data);
+  const liveHasDpdTrend =
+    isLiveDetail && liveCustomer?.d30Dpd != null && liveCustomer?.delta30Dpd != null;
+  const mockTrajectory = !isLiveDetail ? getCustomerDetailContext(c.id)?.riskTrajectory : undefined;
+  const hasHistoricalDpd = isLiveDetail
+    ? liveHasDpdTrend
+    : Boolean(mockTrajectory && typeof mockTrajectory.delta30Dpd === "number");
+  const d30Dpd = isLiveDetail ? (liveCustomer?.d30Dpd ?? c.dpd) : (mockTrajectory?.d30Dpd ?? c.dpd);
+  const delta30Dpd = isLiveDetail
+    ? (liveCustomer?.delta30Dpd ?? 0)
+    : (mockTrajectory?.delta30Dpd ?? 0);
 
   const trendBadgeLabel = !hasHistoricalDpd
     ? "Unavailable"
@@ -263,50 +632,62 @@ function CustomerDetailView() {
   const trendSubtext = !hasHistoricalDpd
     ? "Historical baseline snapshot unavailable"
     : delta30Dpd === 0
-      ? `Stable at ${c.dpd} DPD compared to 30d baseline`
-      : `${d30Dpd} DPD (30d prior) → ${c.dpd} DPD current`;
+      ? `Stable at ${c.dpd} days overdue compared to 30 days ago`
+      : `${d30Dpd} days overdue (30 days ago) → ${c.dpd} days overdue today`;
 
   const [animateLiveBars, setAnimateLiveBars] = useState<boolean>(false);
   useEffect(() => {
     setAnimateLiveBars(false);
     const t = setTimeout(() => setAnimateLiveBars(true), 60);
     return () => clearTimeout(t);
-  }, [c.id, c.cov, paymentSuccessRate, activeChannel.successRate]);
+  }, [c.id, activeAccountId, c.cov, activeChannel.successRate]);
 
-  const [timelineList, setTimelineList] = useState([
-    {
-      title: `${bestTouchpoint(c)} outreach`,
-      category: "Outreach History",
-      time: "2d ago",
-      status: c.reach > 40 ? "Response received" : "No response",
-      tone: "blue",
-    },
-    {
-      title: `Template dispatched: ${c.content[0]}`,
-      category: "Suggested Message",
-      time: "5d ago",
-      status: `Opened${c.click > 30 ? " and clicked" : ""}`,
-      tone: "green",
-    },
-    {
-      title: `${c.repaymentType} received`,
-      category: "Payment History",
-      time: `${c.last}d ago`,
-      status: `Applied to account · ${c.cov}% coverage`,
-      tone: "green",
-    },
-    {
-      title: `Follow-up via ${c.aff[1] ? c.aff[1][0] : "Mails"}`,
-      category: "Outreach History",
-      time: `${c.last + 7}d ago`,
-      status: "Delivered",
-      tone: "blue",
-    },
-  ]);
+  const timelineData = timelineQuery.data;
+  const timelineList = timelineData?.data ?? [];
+  const timelineNextAction = timelineData?.nextAction ?? null;
+  const latestPromise = timelineList
+    .filter((item) => item.kind === "PROMISE" || item.details?.ptpAmount != null)
+    .sort((a, b) => {
+      const aDate = a.details?.ptpDate ?? a.time;
+      const bDate = b.details?.ptpDate ?? b.time;
+      return bDate.localeCompare(aDate);
+    })[0];
+  const promiseAmount = latestPromise?.details?.ptpAmount ?? latestPromise?.amount ?? null;
+  const promiseDate =
+    latestPromise?.details?.ptpDate ??
+    (latestPromise?.kind === "PROMISE" ? latestPromise.time : null);
+  const promiseStatus = latestPromise?.details?.ptpStatus ?? latestPromise?.status ?? null;
+  const [selectedTimelineEventId, setSelectedTimelineEventId] = useState<string | null>(null);
 
-  // Action Taken & Frontline Feedback State
-  const [actionTaken, setActionTaken] = useState<"YES" | "NO" | null>(null);
-  const [activeTimelineStep, setActiveTimelineStep] = useState<number>(0);
+  const offlineFallbackArm = hasPolicyBlock
+    ? "ACT_HOLD_SUPPRESS"
+    : activeChannel.code === "PHONE"
+      ? "ACT_PHONE_STANDARD"
+      : activeChannel.code === "FIELD"
+        ? "ACT_FIELD_VISIT_STANDARD"
+        : "ACT_DIGITAL_REMINDER_EMAIL";
+
+  const nbaPresentation = buildBusinessNbaPresentation({
+    activeNba,
+    customer: c,
+    liveCustomer,
+    outreachStats,
+    timelineList,
+    collectorStatus,
+    overrideActionCode,
+    selectedTimingWindow,
+    rejectionReason,
+    effectiveAccountStatus,
+    hasConsent,
+    isDnc,
+    hasHistoricalDpd,
+    d30Dpd,
+    delta30Dpd,
+    effectiveClick,
+    offlineFallbackActionCode: offlineFallbackArm,
+  });
+
+  // Frontline Feedback State
   const [feedbackChannel, setFeedbackChannel] = useState<"FIELD" | "PHONE" | "MAIL">(() => {
     if (activeChannel.code === "FIELD") return "FIELD";
     if (activeChannel.code === "PHONE") return "PHONE";
@@ -318,7 +699,9 @@ function CustomerDetailView() {
   const [fieldReaction, setFieldReaction] = useState<string>("Cooperative & Willing to Settle");
   const [fieldCommitment, setFieldCommitment] = useState<string>("Immediate Partial Payment Today");
 
-  const [phoneDisposition, setPhoneDisposition] = useState<string>("Connected — Spoke with Customer");
+  const [phoneDisposition, setPhoneDisposition] = useState<string>(
+    "Connected — Spoke with Customer",
+  );
   const [phoneReaction, setPhoneReaction] = useState<string>("Calm & Acknowledged Liability");
   const [phoneNextStep, setPhoneNextStep] = useState<string>("PTP Registered on Call");
 
@@ -328,62 +711,246 @@ function CustomerDetailView() {
 
   // Financial inputs & balance calculation
   const [amountPaidInput, setAmountPaidInput] = useState<number>(0);
-  const [ptpAgreed, setPtpAgreed] = useState<boolean>(true);
+  const [ptpAgreed, setPtpAgreed] = useState<boolean>(false);
   const [ptpAmountInput, setPtpAmountInput] = useState<number>(() => Math.min(1200, c.exp));
-  const [ptpDateInput, setPtpDateInput] = useState<string>("2026-11-05");
+  const [ptpDateInput, setPtpDateInput] = useState<string>("2026-11-12");
   const [ptpPaymentMode, setPtpPaymentMode] = useState<string>("UPI / Instant Transfer");
   const [feedbackNotes, setFeedbackNotes] = useState<string>("");
   const [notesOpen, setNotesOpen] = useState<boolean>(true);
-  const [responseSectionOpen, setResponseSectionOpen] = useState<boolean>(true);
+  const [responseSectionOpen, setResponseSectionOpen] = useState<boolean>(false);
 
-  // Action Taken: NO states
-  const [notTakenReason, setNotTakenReason] = useState<string>("Customer Travel / Out of Station");
-  const [rescheduleDate, setRescheduleDate] = useState<string>("2026-11-02");
-  const [notTakenNotes, setNotTakenNotes] = useState<string>("");
-  const [noActionModalOpen, setNoActionModalOpen] = useState<boolean>(false);
+  const applyOutcomePreset = (preset: ActionOutcomePreset) => {
+    setSelectedOutcomePresetId(preset.id);
+    if (feedbackChannel === "FIELD") {
+      setFieldPresence(preset.dispositionOrPresenceOrStatus);
+      setFieldReaction(preset.reaction);
+      setFieldCommitment(preset.nextStep);
+    } else if (feedbackChannel === "PHONE") {
+      setPhoneDisposition(preset.dispositionOrPresenceOrStatus);
+      setPhoneReaction(preset.reaction);
+      setPhoneNextStep(preset.nextStep);
+    } else {
+      setMailStatus(preset.dispositionOrPresenceOrStatus);
+      setMailReaction(preset.reaction);
+      setMailNextStep(preset.nextStep);
+    }
+    setPtpAgreed(preset.ptpAgreed);
+    if (preset.suggestPaymentMode === "FULL") {
+      setAmountPaidInput(outcomeDueBase);
+    } else if (preset.suggestPaymentMode === "PARTIAL") {
+      setAmountPaidInput((prev) =>
+        prev > 0 && prev < outcomeDueBase ? prev : Math.max(1, Math.round(outcomeDueBase * 0.25)),
+      );
+    } else if (
+      preset.id.includes("unavailable") ||
+      preset.id.includes("refused") ||
+      preset.id.includes("no_response")
+    ) {
+      setAmountPaidInput(0);
+    }
+  };
 
-  interface StoredFeedbackRecord {
-    id: string;
-    actionTaken: "YES" | "NO";
-    channelName: string;
-    channelCode: "FIELD" | "PHONE" | "MAIL";
-    presenceOrDisposition: string;
-    reaction: string;
-    commitmentOrNextStep: string;
-    amountPaid: number;
-    totalAmount: number;
-    remainingBalance: number;
-    currentDpd: number;
-    projectedDpdStatus: string;
-    ptpAgreed: boolean;
-    ptpAmount?: number;
-    ptpDate?: string;
-    ptpMode?: string;
-    notes: string;
-    timestamp: string;
-    notTakenReason?: string;
-    rescheduleDate?: string;
-  }
+  // Synchronize NBA decision and persisted feedback whenever active account or recommendation changes
+  useEffect(() => {
+    setAmountPaidInput(0);
+    setFeedbackNotes("");
+    setPtpAmountInput(Math.min(1200, outcomeDueBase));
+    setExplanationOpen(true);
+    setSelectedOutcomePresetId("");
 
-  const [storedFeedback, setStoredFeedback] = useState<StoredFeedbackRecord | null>(null);
-  const [feedbackSubmitted, setFeedbackSubmitted] = useState<boolean>(false);
+    if (!activeNba) {
+      setCollectorStatus("PENDING");
+      setOverrideActionCode(null);
+      setOverrideChannel(null);
+      return;
+    }
 
-  const handleStoreFeedback = () => {
+    const dec = activeNba.latestDecision;
+    if (dec) {
+      setCollectorStatus(dec.status);
+      if (dec.status === "EDITED") {
+        setOverrideActionCode(dec.selectedAction);
+        setOverrideChannel(
+          NBA_ACTION_META[dec.selectedAction]?.legacyName ?? dec.selectedChannelLabel,
+        );
+      } else {
+        setOverrideActionCode(null);
+        setOverrideChannel(null);
+      }
+      if (dec.reason) setRejectionReason(dec.reason);
+      if (dec.timingWindow) setSelectedTimingWindow(dec.timingWindow);
+    } else {
+      setCollectorStatus("PENDING");
+      setOverrideActionCode(null);
+      setOverrideChannel(null);
+      setRejectionReason("Customer Requested Hardship Pause");
+    }
+
+    const firstActiveArm =
+      activeNba.recommendedAction !== "ACT_HOLD_SUPPRESS"
+        ? activeNba.recommendedAction
+        : (activeNba.eligibleArms.find((a) => a !== "ACT_HOLD_SUPPRESS") ?? "ACT_PHONE_STANDARD");
+    setSelectedArmChoice(dec?.status === "EDITED" ? dec.selectedAction : firstActiveArm);
+
+    const effChan =
+      dec?.status === "EDITED" ? dec.selectedChannelCode : activeNba.recommendedChannelCode;
+    if (effChan === "FIELD_VISIT") {
+      setFeedbackChannel("FIELD");
+    } else if (effChan === "PHONE") {
+      setFeedbackChannel("PHONE");
+    } else if (effChan === "EMAIL" || effChan === "SMS") {
+      setFeedbackChannel("MAIL");
+    }
+  }, [
+    activeAccountId,
+    activeNba,
+    activeNba?.recommendationId,
+    activeNba?.latestDecision?.decisionId,
+    activeNba?.latestFeedback?.feedbackEventId,
+    outcomeDueBase,
+  ]);
+
+  const nbaDecisionMutation = useMutation({
+    mutationFn: ({
+      accountId,
+      payload,
+    }: {
+      accountId: number;
+      payload: Parameters<typeof api.submitNbaDecision>[1];
+    }) => api.submitNbaDecision(accountId, payload),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["customer-nba", customerId] });
+    },
+  });
+
+  const nbaFeedbackMutation = useMutation({
+    mutationFn: ({
+      accountId,
+      payload,
+    }: {
+      accountId: number;
+      payload: Parameters<typeof api.submitNbaFeedback>[1];
+    }) => api.submitNbaFeedback(accountId, payload),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["customer-nba", customerId] });
+    },
+  });
+
+  const outcomeTriggerMutation = useMutation({
+    mutationFn: ({
+      customerCode,
+      payload,
+    }: {
+      customerCode: string;
+      payload: Parameters<typeof api.triggerOutcomeUpdate>[1];
+    }) => api.triggerOutcomeUpdate(customerCode, payload),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["customer-nba", customerId] });
+      void queryClient.invalidateQueries({ queryKey: ["customer-detail", customerId] });
+      void queryClient.invalidateQueries({ queryKey: ["customer-timeline", customerId] });
+      void queryClient.invalidateQueries({ queryKey: ["customer-outreach-stats", customerId] });
+      void queryClient.invalidateQueries({ queryKey: ["customer-payment-model", customerId] });
+    },
+  });
+
+  // Selecting a timeline event refines the NBA bandit with that recorded signal.
+  // The timeline itself is a read-only history: recording NEW events happens only
+  // through the Record Outcome form, never through clicking.
+  useEffect(() => {
+    if (!selectedTimelineOutcome) return;
+    if (!activeNba || activeAccountId == null) {
+      setSelectedTimelineOutcome(null);
+      return;
+    }
+
+    const outcome = selectedTimelineOutcome;
+    const flags = outcomeToFeedbackFlags(outcome);
+    const execTsIso = outcome.timestamp || new Date().toISOString();
+
+    let selectedAction = activeNba.recommendedAction;
+    if (outcome.channel === "PHONE") selectedAction = "ACT_PHONE_STANDARD";
+    else if (outcome.channel === "EMAIL") selectedAction = "ACT_DIGITAL_REMINDER_EMAIL";
+    else if (outcome.channel === "SMS") selectedAction = "ACT_DIGITAL_REMINDER_SMS";
+    else if (outcome.channel === "FIELD_VISIT") selectedAction = "ACT_FIELD_VISIT_STANDARD";
+
+    const statusLower = outcome.outcome.toLowerCase();
+    const executionStatus: "EXECUTED" | "FAILED_ATTEMPT" | "SKIPPED" =
+      statusLower.includes("unavailable") ||
+      statusLower.includes("refused") ||
+      statusLower.includes("no answer")
+        ? "FAILED_ATTEMPT"
+        : "EXECUTED";
+
+    void nbaFeedbackMutation.mutate(
+      {
+        accountId: activeAccountId,
+        payload: {
+          feedbackEventId: `FB-TIMELINE-${activeAccountId}-${Date.now()}`,
+          recommendationId: activeNba.recommendationId,
+          customerId: activeNba.customerId,
+          accountId: activeNba.accountId,
+          selectedAction,
+          executionTs: execTsIso,
+          executionStatus,
+          paymentAmount: outcome.amountPaid ?? 0,
+          paymentDate: outcome.amountPaid && outcome.amountPaid > 0 ? execTsIso.slice(0, 10) : null,
+          respondedFlag: flags.respondedFlag,
+          connectedFlag: flags.connectedFlag,
+          sourceTable:
+            outcome.channel === "EMAIL" || outcome.channel === "SMS"
+              ? "engagement_event"
+              : "contact_event",
+          pastDueAmount: activeNba.pastDueAmount,
+          currentDueAmount: activeNba.currentDueAmount,
+          ptpAgreed: outcome.ptpAgreed ?? false,
+          ptpAmount: outcome.ptpAmount,
+          ptpDate: outcome.ptpDate,
+          notes:
+            outcome.notes ||
+            `Timeline event selected for review: ${outcome.outcome} via ${outcome.channel}`,
+          customerResponse: {
+            channel: outcome.channel,
+            outcome: outcome.outcome,
+            sourceCategory: outcome.sourceEvent.category,
+          },
+        },
+      },
+      {
+        onError: (err) => {
+          console.error("NBA feedback from timeline outcome failed:", err);
+        },
+      },
+    );
+
+    setSelectedTimelineOutcome(null);
+  }, [
+    selectedTimelineOutcome,
+    activeNba,
+    activeAccountId,
+    nbaFeedbackMutation,
+    setSelectedTimelineOutcome,
+  ]);
+
+  const handleStoreFeedback = async () => {
     const paid = Number(amountPaidInput) || 0;
-    const remaining = Math.max(0, c.exp - paid);
+    const dueBase = outcomeDueBase;
+    const remaining = Math.max(0, dueBase - paid);
     const projectedDpd =
-      paid >= c.exp
-        ? "0 DPD (Fully Cured ✓)"
+      paid >= dueBase
+        ? "Balance Paid in Full"
         : paid > 0
-          ? `${c.dpd} DPD (Partially Serviced)`
-          : `${c.dpd} DPD (Overdue)`;
+          ? "Partially Paid"
+          : `${c.dpd} Days Overdue`;
 
+    const execArm = resolveArmForFeedbackChannel(feedbackChannel, activeNba);
+    const bizMeta = getBusinessActionMeta(execArm);
     const channelName =
-      feedbackChannel === "FIELD"
+      bizMeta.cardTitle ||
+      (feedbackChannel === "FIELD"
         ? "Field Visit"
         : feedbackChannel === "PHONE"
           ? "Phone Call"
-          : "Mails & Digital";
+          : "Email Reminder");
 
     const presenceOrDisp =
       feedbackChannel === "FIELD"
@@ -406,175 +973,236 @@ function CustomerDetailView() {
           ? phoneNextStep
           : mailNextStep;
 
-    const newRecord: StoredFeedbackRecord = {
-      id: `fb-${Date.now()}`,
-      actionTaken: "YES",
-      channelName,
-      channelCode: feedbackChannel,
-      presenceOrDisposition: presenceOrDisp,
-      reaction: reactionText,
-      commitmentOrNextStep: commitmentOrStep,
-      amountPaid: paid,
-      totalAmount: c.exp,
-      remainingBalance: remaining,
-      currentDpd: c.dpd,
-      projectedDpdStatus: projectedDpd,
-      ptpAgreed,
-      ptpAmount: ptpAgreed ? Number(ptpAmountInput) || 0 : undefined,
-      ptpDate: ptpAgreed ? ptpDateInput : undefined,
-      ptpMode: ptpAgreed ? ptpPaymentMode : undefined,
-      notes: feedbackNotes.trim() || "Frontline outreach feedback recorded.",
-      timestamp: "Just now",
-    };
+    const respondedFlag: 0 | 1 =
+      paid > 0 ||
+      (feedbackChannel === "FIELD" &&
+        (fieldPresence === "Customer Met in Person" ||
+          fieldPresence === "Met Family / Third-Party")) ||
+      (feedbackChannel === "PHONE" &&
+        (phoneDisposition.startsWith("Connected") || phoneDisposition.startsWith("Answered"))) ||
+      (feedbackChannel === "MAIL" &&
+        (mailStatus.includes("Clicked") ||
+          mailStatus.includes("Opened") ||
+          mailStatus.includes("Replied")))
+        ? 1
+        : 0;
 
-    setStoredFeedback(newRecord);
-    setActionTaken("YES");
-    setFeedbackSubmitted(true);
+    const connectedFlag: 0 | 1 =
+      (feedbackChannel === "FIELD" && fieldPresence === "Customer Met in Person") ||
+      (feedbackChannel === "PHONE" && phoneDisposition.startsWith("Connected"))
+        ? 1
+        : 0;
+
+    let validationStatus: string | undefined;
+    if (activeNba && activeAccountId != null) {
+      const execTsIso = new Date().toISOString();
+      const payDateIso = paid > 0 ? execTsIso.slice(0, 10) : null;
+      const fbEventId = `FB-UI-${activeAccountId}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+      try {
+        const res = await nbaFeedbackMutation.mutateAsync({
+          accountId: activeAccountId,
+          payload: {
+            feedbackEventId: fbEventId,
+            recommendationId: activeNba.recommendationId,
+            customerId: activeNba.customerId,
+            accountId: activeNba.accountId,
+            selectedAction: execArm,
+            executionTs: execTsIso,
+            executionStatus: "EXECUTED",
+            paymentAmount: paid,
+            paymentDate: payDateIso,
+            respondedFlag,
+            connectedFlag,
+            sourceTable: feedbackChannel === "MAIL" ? "engagement_event" : "contact_event",
+            pastDueAmount: activeNba.pastDueAmount,
+            currentDueAmount: activeNba.currentDueAmount,
+            timingWindow: selectedTimingWindow,
+            ptpAgreed,
+            ptpAmount: ptpAgreed ? Number(ptpAmountInput) || 0 : undefined,
+            ptpDate: ptpAgreed ? ptpDateInput : undefined,
+            ptpMode: ptpAgreed ? ptpPaymentMode : undefined,
+            notes: feedbackNotes.trim() || "Customer outreach outcome recorded.",
+            customerResponse: {
+              channel: feedbackChannel,
+              disposition: presenceOrDisp,
+              reaction: reactionText,
+              commitment: commitmentOrStep,
+            },
+          },
+        });
+        validationStatus = res.data.validationStatus;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "Failed to save outcome";
+        toast.error(msg);
+        return;
+      }
+    }
+
     setDrawerOpen(false);
 
-    const timelineStatus =
-      paid > 0
-        ? `$${paid.toLocaleString()} Paid · Rem: $${remaining.toLocaleString()}`
-        : ptpAgreed
-          ? `PTP: $${(Number(ptpAmountInput) || 0).toLocaleString()} by ${ptpDateInput}`
-          : presenceOrDisp;
+    // Propagate the recorded outcome to Engagement, Payment and Outreach models
+    // in real time, in addition to the NBA bandit feedback above.
+    // (Single writer for contact_event: the propagation service records the
+    // outreach touch — do NOT also call recordCustomerOutcome here or the
+    // outreach attempt cap will be consumed twice.)
+    if (activeAccountId != null) {
+      const propagationChannel =
+        feedbackChannel === "FIELD"
+          ? "FIELD_VISIT"
+          : feedbackChannel === "PHONE"
+            ? "PHONE"
+            : "EMAIL";
+      try {
+        await outcomeTriggerMutation.mutateAsync({
+          customerCode: c.id,
+          payload: {
+            accountId: activeAccountId,
+            channel: propagationChannel,
+            outcome: presenceOrDisp,
+            amountPaid: paid,
+            ptpAgreed,
+            ptpAmount: ptpAgreed ? Number(ptpAmountInput) || 0 : undefined,
+            ptpDate: ptpAgreed ? ptpDateInput : undefined,
+            notes: feedbackNotes.trim() || `Outcome recorded via ${channelName}`,
+          },
+        });
+      } catch (err) {
+        console.error("Outcome propagation from form failed:", err);
+      }
+    }
 
-    setTimelineList((prev) => [
-      {
-        title: `${channelName} Feedback: ${presenceOrDisp}`,
-        category: "Outreach History",
-        time: "Just now",
-        status: timelineStatus,
-        tone: "green",
-      },
-      ...prev,
-    ]);
-    setActiveTimelineStep(0);
+    await queryClient.invalidateQueries({ queryKey: ["customer-timeline", customerId] });
 
-    toast.success("Recovery outcome stored successfully & timeline updated!");
-  };
-
-  const handleStoreNoActionFeedback = () => {
-    const newRecord: StoredFeedbackRecord = {
-      id: `fb-${Date.now()}`,
-      actionTaken: "NO",
-      channelName: channelDisplayLabel,
-      channelCode: activeChannel.code === "FIELD" ? "FIELD" : activeChannel.code === "PHONE" ? "PHONE" : "MAIL",
-      presenceOrDisposition: notTakenReason,
-      reaction: "Not Contacted",
-      commitmentOrNextStep: `Rescheduled for ${rescheduleDate}`,
-      amountPaid: 0,
-      totalAmount: c.exp,
-      remainingBalance: c.exp,
-      currentDpd: c.dpd,
-      projectedDpdStatus: `${c.dpd} DPD (Deferred)`,
-      ptpAgreed: false,
-      notes: notTakenNotes.trim() || `Outreach postponed due to: ${notTakenReason}`,
-      timestamp: "Just now",
-      notTakenReason,
-      rescheduleDate,
-    };
-
-    setStoredFeedback(newRecord);
-    setActionTaken("NO");
-    setFeedbackSubmitted(true);
-    setNoActionModalOpen(false);
-
-    setTimelineList((prev) => [
-      {
-        title: `Outreach Deferred: ${notTakenReason}`,
-        category: "Next Best Action",
-        time: "Just now",
-        status: `Rescheduled for ${rescheduleDate}`,
-        tone: "rose",
-      },
-      ...prev,
-    ]);
-    setActiveTimelineStep(0);
-
-    toast.info(`Action deferred: ${notTakenReason}. Rescheduled for ${rescheduleDate}.`);
+    const toastSpec = formatValidationToastMessage(validationStatus, channelName);
+    if (toastSpec.level === "warning") {
+      toast.warning(toastSpec.message);
+    } else if (toastSpec.level === "info") {
+      toast.info(toastSpec.message);
+    } else {
+      toast.success(toastSpec.message);
+    }
   };
 
   const bTouch = bestTouchpoint(c);
-  const fallbackTouch = c.aff[1] ? c.aff[1][0] : "Mails";
 
-  const wk = [
-    Math.ceil(c.touches / 3),
-    Math.ceil(c.touches / 4) + 1,
-    Math.floor(c.touches / 3) + 1,
-    Math.max(1, c.touches - 4),
-  ];
-  const pw = [0, c.pays > 1 ? 1 : 0, 0, c.pays ? 1 : 0];
-  const maxWk = Math.max(...wk, 3);
-
-  const handleRecordOutcome = () => {
-    setTimelineList([
-      {
-        title: `Outcome Logged: ${selectedOutcome}`,
-        category: "Outreach History",
-        time: "Just now",
-        status: selectedOutcome === "Promise to Pay" ? `${ptpAmount} PTP` : "Logged",
-        tone: "green",
-      },
-      ...timelineList,
-    ]);
-    setDrawerOpen(false);
-    toast.success(`Outcome "${selectedOutcome}" recorded for ${c.name}`);
+  // Persist collector decisions to Postgres (collector_action_history) so the
+  // activity timeline shows genuine rows, then refresh the timeline query.
+  const persistCollectorAction = (actionType: string, notes?: string | null) => {
+    void api
+      .recordCollectorAction(c.id, {
+        accountId: activeAccountId,
+        actionType,
+        notes: notes ?? null,
+      })
+      .then(() => {
+        void queryClient.invalidateQueries({ queryKey: ["customer-timeline", customerId] });
+      })
+      .catch((err) => {
+        console.error("Failed to persist collector action:", err);
+      });
   };
 
-  const handleApproveNBA = () => {
-    if (hasPolicyBlock) {
-      toast.error("Action blocked by policy rules. Manual supervisor review required.");
+  const handleApproveNBA = async () => {
+    if (hasPolicyBlock || isHoldSuppressed) {
+      toast.error("Action is paused due to customer permissions or account restrictions.");
       return;
     }
-    setCollectorStatus("APPROVED");
-    toast.success(`Next Best Action approved: ${actionHeadline} via ${channelDisplayLabel}`);
-    setTimelineList((prev) => [
-      {
-        title: `NBA Approved: ${actionHeadline} (${channelDisplayLabel})`,
-        category: "Next Best Action",
-        time: "Just now",
-        status: "Approved for Execution",
-        tone: "green",
-      },
-      ...prev,
-    ]);
+    const chosenArm =
+      activeNba && collectorStatus === "EDITED" && overrideActionCode
+        ? overrideActionCode
+        : (activeNba?.recommendedAction ?? effectiveActionCode);
+    const friendlyTitle = getBusinessActionMeta(chosenArm).headline;
+
+    if (!activeNba || activeAccountId == null) {
+      setCollectorStatus("APPROVED");
+      toast.success(`Action approved: ${friendlyTitle}`);
+      return;
+    }
+    try {
+      await nbaDecisionMutation.mutateAsync({
+        accountId: activeAccountId,
+        payload: {
+          recommendationId: activeNba.recommendationId,
+          decisionType: "APPROVE",
+          selectedAction: chosenArm,
+          timingWindow: selectedTimingWindow,
+        },
+      });
+      setCollectorStatus("APPROVED");
+      toast.success(`Action approved: ${friendlyTitle}`);
+
+      // Open the record outcome drawer so the collector can capture the real
+      // execution result. The outcome form will propagate feedback to all four
+      // models when submitted.
+      const acceptedChannelCode = NBA_ACTION_META[chosenArm]?.channelCode ?? targetChannelCode;
+      if (acceptedChannelCode === "FIELD_VISIT" || acceptedChannelCode === "FIELD") {
+        setFeedbackChannel("FIELD");
+      } else if (acceptedChannelCode === "PHONE") {
+        setFeedbackChannel("PHONE");
+      } else {
+        setFeedbackChannel("MAIL");
+      }
+      setSelectedOutcomePresetId("");
+      setDrawerOpen(true);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to approve action");
+    }
   };
 
-  const handleRejectNBA = () => {
+  const handleRejectNBA = async () => {
+    const friendlyTitle = getBusinessActionMeta(effectiveActionCode).headline;
+    if (activeNba && activeAccountId != null) {
+      try {
+        await nbaDecisionMutation.mutateAsync({
+          accountId: activeAccountId,
+          payload: {
+            recommendationId: activeNba.recommendationId,
+            decisionType: "REJECT",
+            selectedAction: effectiveActionCode,
+            reason: rejectionReason,
+            notes: rejectionNotes.trim() || undefined,
+          },
+        });
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : "Failed to record declined action");
+        return;
+      }
+    }
     setCollectorStatus("REJECTED");
     setRejectionModalOpen(false);
-    toast.warning(`Next Best Action declined: ${rejectionReason}`);
-    setTimelineList((prev) => [
-      {
-        title: `NBA Declined: ${actionHeadline} (${channelDisplayLabel})`,
-        category: "Next Best Action",
-        time: "Just now",
-        status: `Declined: ${rejectionReason}`,
-        tone: "rose",
-      },
-      ...prev,
-    ]);
+    toast.warning(`Recommendation declined: ${rejectionReason}`);
+
+    persistCollectorAction("DECISION_REJECT", `Declined: ${rejectionReason}`);
   };
 
-  const handleChangeChannelSubmit = (newChannelName: string, newTiming: string) => {
-    setOverrideChannel(newChannelName);
+  const handleChangeChannelSubmit = async (newArmCode: string, newTiming: string) => {
+    const meta = NBA_ACTION_META[newArmCode];
+    const targetLabel = getBusinessActionMeta(newArmCode).cardTitle;
+    if (activeNba && activeAccountId != null) {
+      try {
+        await nbaDecisionMutation.mutateAsync({
+          accountId: activeAccountId,
+          payload: {
+            recommendationId: activeNba.recommendationId,
+            decisionType: "OVERRIDE",
+            selectedAction: newArmCode,
+            timingWindow: newTiming,
+          },
+        });
+      } catch (err) {
+        toast.error(
+          err instanceof Error ? err.message : "Action could not be selected under current rules",
+        );
+        return;
+      }
+    }
+    setOverrideActionCode(newArmCode);
+    setOverrideChannel(meta?.legacyName ?? null);
     setSelectedTimingWindow(newTiming);
     setCollectorStatus("EDITED");
     setChangeChannelModalOpen(false);
-    const targetLabel =
-      newChannelName === "Phone calls" ? "Phone Call" : newChannelName === "Mails" ? "Email" : "Field Visit";
-    toast.success(`Outreach channel updated to ${targetLabel} (${newTiming})`);
-    setTimelineList((prev) => [
-      {
-        title: `Channel Override: Switched to ${targetLabel} (${newTiming})`,
-        category: "Next Best Action",
-        time: "Just now",
-        status: "Channel Updated",
-        tone: "blue",
-      },
-      ...prev,
-    ]);
+    toast.success(`Selected action updated to ${targetLabel} (${newTiming})`);
+    persistCollectorAction("DECISION_OVERRIDE", `Action changed to ${targetLabel} (${newTiming})`);
   };
 
   return (
@@ -598,19 +1226,22 @@ function CustomerDetailView() {
             <div>
               <div className="flex items-center gap-2.5 flex-wrap">
                 <h2 className="text-2xl font-bold tracking-tight text-foreground">{c.name}</h2>
+                <span
+                  className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider border ${
+                    effectiveAccountStatus === "ACTIVE"
+                      ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/30"
+                      : "bg-slate-500/10 text-slate-600 dark:text-slate-300 border-slate-500/30"
+                  }`}
+                >
+                  {effectiveAccountStatus}
+                </span>
               </div>
               <p className="mt-1 text-xs text-muted-foreground">
-                {c.id} · Account {c.acct} · Total Amount ${c.exp.toLocaleString()}
+                {c.id} · Account {c.acct}
               </p>
             </div>
 
             <div className="flex flex-wrap items-center gap-5 sm:gap-8">
-              <div>
-                <div className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
-                  Priority Score
-                </div>
-                <div className="mt-0.5 text-2xl font-bold text-foreground">{c.pri}</div>
-              </div>
               <div>
                 <div className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
                   Repayment Ratio
@@ -619,9 +1250,15 @@ function CustomerDetailView() {
               </div>
               <div>
                 <div className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
-                  Communication Preferences
+                  Preferred Channel
                 </div>
-                <div className="mt-0.5 text-xl font-bold text-primary">{bTouch}</div>
+                <div className="mt-0.5 text-xl font-bold text-primary">
+                  {activeNba
+                    ? isHoldSuppressed
+                      ? "On Hold"
+                      : getBusinessActionMeta(activeNba.recommendedAction).channelLabel
+                    : bTouch}
+                </div>
               </div>
               <div>
                 <div className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
@@ -636,78 +1273,156 @@ function CustomerDetailView() {
         {/* 3 CORE DETAIL CARDS */}
         <div className="grid gap-4 grid-cols-1 md:grid-cols-3">
           {/* 1. Suggested Message */}
-          <div className="rounded-2xl border border-border/80 bg-card p-5 shadow-xs flex flex-col justify-between">
+          <div className="relative overflow-hidden rounded-2xl border border-primary/20 bg-card p-5 shadow-xs flex flex-col justify-between">
+            <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-blue-500 via-primary to-indigo-600" />
             <div>
-              <h3 className="text-sm font-bold text-foreground">Engagement Model</h3>
-              <p className="text-xs text-muted-foreground mb-4">
-                Recommended message template &amp; operational objective
-              </p>
+              <div className="min-h-[44px] mb-3">
+                <h3 className="text-sm font-bold text-foreground">Engagement Model</h3>
+                <p className="text-xs text-muted-foreground">
+                  Recommended message template &amp; operational objective
+                </p>
+              </div>
 
               <div className="space-y-2 text-xs">
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Suggested Message Template</span>
-                  <span className="font-bold text-primary truncate max-w-[170px] text-right">
+                <div className="flex justify-between items-start gap-2">
+                  <span className="text-muted-foreground shrink-0">Suggested Message Template</span>
+                  <span className="font-bold text-primary text-right leading-tight max-w-[210px]">
                     {c.content[0]}
                   </span>
                 </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Message Objective</span>
-                  <span className="font-semibold text-foreground text-right max-w-[180px]">
+                <div className="flex justify-between items-start gap-2">
+                  <span className="text-muted-foreground shrink-0">Message Objective</span>
+                  <span className="font-semibold text-foreground text-right leading-tight max-w-[210px]">
                     {c.content[1]}
                   </span>
                 </div>
-                <div className="flex justify-between">
+                <div className="flex justify-between items-center">
                   <span className="text-muted-foreground">Historical open rate</span>
-                  <span className="font-semibold text-foreground">{c.open}%</span>
+                  <div className="flex items-center gap-2">
+                    {renderBlockBar(c.open, "text-blue-600 dark:text-blue-400")}
+                    <span className="font-semibold text-foreground w-8 text-right font-mono text-[11px]">
+                      {c.open > 0 ? `${c.open}%` : "—"}
+                    </span>
+                  </div>
                 </div>
-                <div className="flex justify-between">
+                <div className="flex justify-between items-center">
                   <span className="text-muted-foreground">Link engagement</span>
-                  <span className="font-semibold text-foreground">{c.click}%</span>
+                  <div className="flex items-center gap-2">
+                    {renderBlockBar(effectiveClick, "text-indigo-600 dark:text-indigo-400")}
+                    <span className="font-semibold text-foreground w-8 text-right font-mono text-[11px]">
+                      {effectiveClick != null && effectiveClick > 0 ? `${effectiveClick}%` : "—"}
+                    </span>
+                  </div>
                 </div>
-                <div className="flex justify-between">
+                <div className="flex justify-between items-center">
                   <span className="text-muted-foreground">Response rate</span>
-                  <span className="font-semibold text-foreground">{c.reach}%</span>
+                  <div className="flex items-center gap-2">
+                    {renderBlockBar(c.reach, "text-emerald-600 dark:text-emerald-400")}
+                    <span className="font-semibold text-foreground w-8 text-right font-mono text-[11px]">
+                      {c.reach > 0 ? `${c.reach}%` : "—"}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Option 1: Live Message / Script Preview Box */}
+              <div className="mt-4 pt-3.5 border-t border-border/70 space-y-2">
+                <div className="flex items-center gap-1.5 text-[11px] font-bold text-foreground">
+                  <FileText className="size-3.5 text-primary" />
+                  <span>{isVoiceScript ? "Live Script Snippet" : "Live Message Preview"}</span>
+                </div>
+
+                <div className="rounded-xl border border-border/70 bg-muted/30 p-3 text-[11.5px] leading-relaxed text-muted-foreground font-sans italic">
+                  "{liveSnippet}"
+                </div>
+
+                <div className="flex items-center justify-between gap-2 pt-0.5">
+                  <span className="text-[10px] text-muted-foreground truncate">
+                    Target: <strong className="text-foreground">{c.name}</strong> ({c.acct})
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      navigator.clipboard.writeText(liveSnippet);
+                      setCopiedSnippet(true);
+                      toast.success(
+                        isVoiceScript
+                          ? "Call script copied to clipboard"
+                          : "Message template copied to clipboard",
+                      );
+                      setTimeout(() => setCopiedSnippet(false), 2000);
+                    }}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[10.5px] font-semibold bg-primary/10 text-primary hover:bg-primary/20 transition cursor-pointer shrink-0"
+                  >
+                    {copiedSnippet ? (
+                      <>
+                        <Check className="size-3 text-emerald-600" />
+                        <span className="text-emerald-600 font-bold">Copied</span>
+                      </>
+                    ) : (
+                      <>
+                        <Copy className="size-3" />
+                        <span>{isVoiceScript ? "Copy Script" : "Copy Template"}</span>
+                      </>
+                    )}
+                  </button>
                 </div>
               </div>
             </div>
           </div>
 
-          {/* 2. Contact Frequency & Schedule */}
-          <div className="rounded-2xl border border-border/80 bg-card p-5 shadow-xs flex flex-col justify-between">
-            <div>
-              <h3 className="text-sm font-bold text-foreground">Payment Model</h3>
-              <p className="text-xs text-muted-foreground mb-4">
-                Turnaround time, payment recency &amp; scheduled contact frequency
-              </p>
+          {/* 2. Payment Model */}
+          <div className="relative overflow-hidden rounded-2xl border border-primary/20 bg-card p-5 shadow-xs flex flex-col justify-between">
+            <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-primary/80 via-primary to-emerald-500" />
+            <div className="flex flex-col h-full">
+              <div className="min-h-[44px] mb-3">
+                <h3 className="text-sm font-bold text-foreground">Payment Model</h3>
+                <p className="text-xs text-muted-foreground">
+                  Four approved repayment and contact-history metrics
+                </p>
+              </div>
 
-              <div className="space-y-2 text-xs">
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Repayment Profile</span>
-                  <span
-                    className={`font-bold ${c.repaymentType === "Full Repayment" ? "text-emerald-600 dark:text-emerald-400" : c.repaymentType === "Partial Repayment" ? "text-amber-600 dark:text-amber-400" : "text-muted-foreground"}`}
-                  >
-                    {c.repaymentType}
-                  </span>
+              <div className="grid grid-cols-2 gap-3 flex-1 auto-rows-fr">
+                <div className="rounded-xl border border-border/70 bg-muted/20 p-3.5 flex flex-col justify-between">
+                  <div className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+                    Contact attempts
+                  </div>
+                  <div className="my-2 text-2xl font-black text-foreground tabular-nums">
+                    {c.paymentContactAttempts ?? "—"}
+                  </div>
+                  <div className="text-[10.5px] text-muted-foreground">Last 30 days</div>
                 </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Time taken to repay</span>
-                  <span className="font-semibold text-foreground">{c.daysToRepay} days</span>
+                <div className="rounded-xl border border-border/70 bg-muted/20 p-3.5 flex flex-col justify-between">
+                  <div className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+                    Successful payments
+                  </div>
+                  <div className="my-2 text-2xl font-black text-foreground tabular-nums">
+                    {c.pays}
+                  </div>
+                  <div className="text-[10.5px] text-muted-foreground">Last 30 days</div>
                 </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Repayments (last 30d)</span>
-                  <span className="font-semibold text-foreground">{c.pays}</span>
+                <div className="rounded-xl border border-border/70 bg-muted/20 p-3.5 flex flex-col justify-between">
+                  <div className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+                    Days since payment
+                  </div>
+                  <div className="my-2 text-2xl font-black text-foreground tabular-nums">
+                    {c.last}
+                  </div>
+                  <div className="text-[10.5px] text-muted-foreground">All verified history</div>
                 </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Days since last repayment</span>
-                  <span className="font-semibold text-foreground">{c.last}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Repayment coverage ratio</span>
-                  <span className="font-semibold text-foreground">{c.cov}%</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Contact Frequency</span>
-                  <span className="font-bold text-primary">{c.cad[0]}</span>
+                <div className="rounded-xl border border-border/70 bg-muted/20 p-3.5 flex flex-col justify-between">
+                  <div className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+                    Coverage ratio
+                  </div>
+                  <div className="my-2 text-2xl font-black text-primary tabular-nums">{c.cov}%</div>
+                  <div>
+                    <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+                      <div
+                        className="h-full rounded-full bg-primary"
+                        style={{ width: `${Math.min(100, c.cov)}%` }}
+                      />
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
@@ -718,106 +1433,302 @@ function CustomerDetailView() {
             {/* Subtle top accent gradient */}
             <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-primary/80 via-primary to-emerald-500" />
 
-            <div>
-              <div className="flex items-start justify-between gap-2 flex-wrap mb-3">
+            <div className="space-y-3">
+              <div className="min-h-[44px] mb-3 flex items-start justify-between gap-2 flex-wrap">
                 <div>
-                  <h3 className="text-sm font-bold text-foreground">Outreach Model</h3>
-                  <p className="text-[11px] text-muted-foreground">
-                    Optimal contact channel &amp; timing recommendation
+                  <div className="flex items-center gap-1.5">
+                    <h3 className="text-sm font-bold text-foreground">Outreach Model</h3>
+                    <InfoTooltip
+                      title="Historical Channel Affinity Model"
+                      content="Formula: Channel Affinity = (0.60 × CSR) + (0.40 × Response Rate), ranked with confidence-tiering and Empirical Bayes shrinkage so single-attempt flukes do not override higher-evidence channels."
+                      impact="Ranks policy-eligible channels on this account by historical engagement; Next Best Action combines this with delinquency, recovery value, and exploration."
+                    />
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Optimal contact channel recommendation
                   </p>
                 </div>
+                {/* Recommendation Status Badge */}
+                {outreachStats && (
+                  <span
+                    className={`rounded-full px-2.5 py-0.5 text-[10px] font-extrabold uppercase tracking-wider shrink-0 ${
+                      outreachStats.recommendationStatus === "RECOMMENDED"
+                        ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30"
+                        : outreachStats.recommendationStatus === "SUPPRESSED_DNC"
+                          ? "bg-rose-500/15 text-rose-600 dark:text-rose-400 border border-rose-500/30"
+                          : "bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/30"
+                    }`}
+                  >
+                    {outreachStats.recommendationStatus === "RECOMMENDED"
+                      ? "Recommended"
+                      : outreachStats.recommendationStatus === "SUPPRESSED_DNC"
+                        ? "DNC Suppressed"
+                        : outreachStats.recommendationStatus === "INSUFFICIENT_DATA"
+                          ? "Insufficient Data"
+                          : "No Eligible Channel"}
+                  </span>
+                )}
               </div>
 
+              {/* Offline Warning Banner if API fails */}
+              {outreachQuery.isError && (
+                <div className="rounded-lg bg-amber-500/10 border border-amber-500/30 p-2 text-[10.5px] text-amber-700 dark:text-amber-300 flex items-center gap-1.5">
+                  <AlertTriangle className="size-3.5 shrink-0" />
+                  <span>Backend Outreach API offline. Showing labelled demo state.</span>
+                </div>
+              )}
+
               {/* PRIMARY RECOMMENDED CHANNEL HERO CARD */}
-              <div className="rounded-xl border border-border/80 bg-muted/20 p-3.5 mb-1">
+              <div className="rounded-xl border border-border/80 bg-muted/20 p-3.5 space-y-3">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2.5">
-                    <div className="size-8 rounded-lg bg-primary/15 grid place-items-center text-primary">
-                      <activeChannel.icon className="size-4" />
+                    <div className="size-9 rounded-lg bg-primary/15 grid place-items-center text-primary">
+                      <OutreachHeroIcon className="size-4" />
                     </div>
                     <div>
                       <div className="flex items-center gap-1.5">
-                        <span className="text-xs font-bold text-foreground">{activeChannel.name}</span>
+                        <span className="text-sm font-bold text-foreground">
+                          {outreachStats
+                            ? outreachStats.recommendedChannel ||
+                              (outreachStats.recommendationStatus === "INSUFFICIENT_DATA"
+                                ? "Insufficient Interaction History"
+                                : outreachStats.recommendationStatus === "SUPPRESSED_DNC"
+                                  ? "Outreach Suppressed"
+                                  : "No Eligible Channel")
+                            : activeChannel.label}
+                        </span>
+                        {(!outreachStats ||
+                          outreachStats.recommendationStatus === "RECOMMENDED") && (
+                          <span className="rounded-md bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 px-1.5 py-0.2 text-[9.5px] font-bold">
+                            Recommended
+                          </span>
+                        )}
+                        {outreachStats?.recommendationStatus === "RECOMMENDED" &&
+                          outreachStats.channels.find(
+                            (x) => x.channelCode === outreachStats.recommendedChannelCode,
+                          )?.dataStatus === "INSUFFICIENT" && (
+                            <span
+                              title="Recommended channel has fewer than 3 valid historical attempts"
+                              className="rounded-md bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/30 px-1.5 py-0.2 text-[9px] font-bold"
+                            >
+                              Low Sample
+                            </span>
+                          )}
+                        {outreachStats?.recommendationStatus === "INSUFFICIENT_DATA" && (
+                          <span className="rounded-md bg-amber-500/15 text-amber-600 dark:text-amber-400 px-1.5 py-0.2 text-[9.5px] font-bold">
+                            Insufficient Data
+                          </span>
+                        )}
+                        {outreachStats?.recommendationStatus === "SUPPRESSED_DNC" && (
+                          <span className="rounded-md bg-rose-500/15 text-rose-600 dark:text-rose-400 px-1.5 py-0.2 text-[9.5px] font-bold">
+                            DNC Blocked
+                          </span>
+                        )}
                         {overrideChannel && (
                           <span className="rounded-sm bg-amber-500/15 px-1 py-0.2 text-[9px] font-bold text-amber-600 dark:text-amber-400">
                             Overridden
                           </span>
                         )}
                       </div>
-                      <span className="text-[10.5px] text-muted-foreground">
-                        Success {activeChannel.successRate}% · Response {activeChannel.responseRate}%
+                      <span className="text-[10px] text-muted-foreground">
+                        Historical Channel Affinity Model
                       </span>
                     </div>
                   </div>
+                </div>
 
-                  <div className="text-right">
-                    <div className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
-                      Suitability Score
+                {/* 3 Prominent Stat Badges */}
+                <div className="grid grid-cols-3 gap-2 pt-1 border-t border-border/60 text-center">
+                  <div className="rounded-lg bg-card/80 border border-border/70 p-2 h-[68px] flex flex-col items-center justify-center shadow-2xs">
+                    <div className="text-base font-black tracking-tight text-foreground tabular-nums">
+                      {outreachStats
+                        ? outreachStats.recommendedCsr != null
+                          ? `${outreachStats.recommendedCsr}%`
+                          : "—"
+                        : activeChannel.csrRaw != null
+                          ? `${activeChannel.csrRaw}%`
+                          : `${activeChannel.successRate}%`}
                     </div>
-                    <div className="text-base font-extrabold text-primary">
-                      {activeChannel.score.toFixed(3)}
+                    <div className="text-[9px] font-bold text-muted-foreground uppercase tracking-wider mt-0.5">
+                      CSR
+                    </div>
+                  </div>
+                  <div className="rounded-lg bg-card/80 border border-border/70 p-2 h-[68px] flex flex-col items-center justify-center shadow-2xs">
+                    <div className="text-base font-black tracking-tight text-foreground tabular-nums">
+                      {outreachStats
+                        ? outreachStats.recommendedResponseRate != null
+                          ? `${outreachStats.recommendedResponseRate}%`
+                          : "—"
+                        : activeChannel.rrRaw != null
+                          ? `${activeChannel.rrRaw}%`
+                          : `${activeChannel.responseRate}%`}
+                    </div>
+                    <div className="text-[9px] font-bold text-muted-foreground uppercase tracking-wider mt-0.5">
+                      Response Rate
+                    </div>
+                  </div>
+                  <div className="rounded-lg bg-primary/10 border border-primary/35 p-2 h-[68px] flex flex-col items-center justify-center shadow-2xs">
+                    <div className="text-base font-black tracking-tight text-primary tabular-nums">
+                      {outreachStats
+                        ? outreachStats.recommendedAffinityScore != null
+                          ? outreachStats.recommendedAffinityScore.toFixed(1)
+                          : "—"
+                        : activeChannel.affinityRaw != null
+                          ? activeChannel.affinityRaw.toFixed(1)
+                          : activeChannel.score.toFixed(1)}
+                    </div>
+                    <div className="text-[9px] font-bold text-primary uppercase tracking-wider mt-0.5">
+                      Affinity Score
                     </div>
                   </div>
                 </div>
 
-                {/* Score Formula Tag */}
-                <div className="mt-2.5 flex items-center justify-between text-[10px] text-muted-foreground border-t border-border/60 pt-2">
-                  <span className="text-[9.5px]">
-                    60% Contact Success + 40% Customer Response
-                  </span>
-                  <span className="font-semibold text-foreground/80">
-                    {fallbackLevel === "CUSTOMER" ? "Customer History Profile" : "Portfolio Baseline"}
-                  </span>
+                {/* Channel Comparison Matrix with Pixel-Perfect Vertical Column Alignment */}
+                <div className="space-y-1.5 pt-1">
+                  <div className="flex items-center justify-between text-[10px] font-bold uppercase tracking-wider text-muted-foreground px-1">
+                    <span>Channel Comparison</span>
+                    <div className="flex items-center gap-1 font-mono text-[9px] text-muted-foreground text-center">
+                      <span className="w-9 text-center">CSR</span>
+                      <span className="w-9 text-center">RR</span>
+                      <span className="w-11 text-center">AFFINITY</span>
+                    </div>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    {rawCandidates.map((cand) => {
+                      const chData = outreachStats?.channels.find(
+                        (x) =>
+                          x.channelCode === cand.code ||
+                          (cand.code === "FIELD" && x.channelCode === "FIELD_VISIT"),
+                      );
+
+                      const isDnc = outreachStats?.recommendationStatus === "SUPPRESSED_DNC";
+                      const isEligible = chData ? chData.isEligible : !isDnc && cand.permitted;
+                      const affinityVal = chData?.affinityScore;
+                      const dataStatus = chData?.dataStatus ?? "NO_ATTEMPTS";
+
+                      // STRICT OPTIMAL CHECK:
+                      // 1. Eligible
+                      // 2. Affinity score is not null
+                      // 3. Recommendation status is RECOMMENDED
+                      // 4. Highest affinity channel matching recommendedChannelCode
+                      const isOptimal =
+                        !isDnc &&
+                        isEligible &&
+                        affinityVal != null &&
+                        outreachStats?.recommendationStatus === "RECOMMENDED" &&
+                        (outreachStats.recommendedChannelCode === cand.code ||
+                          (cand.code === "FIELD" &&
+                            outreachStats.recommendedChannelCode === "FIELD_VISIT"));
+
+                      const isNoAttempts =
+                        dataStatus === "NO_ATTEMPTS" || (chData?.totalValidAttempts ?? 0) === 0;
+
+                      const csrDisplay = isNoAttempts
+                        ? "—"
+                        : chData?.csr != null
+                          ? `${chData.csr}%`
+                          : cand.csrRaw != null
+                            ? `${cand.csrRaw}%`
+                            : "—";
+                      const rrDisplay = isNoAttempts
+                        ? "—"
+                        : chData?.responseRate != null
+                          ? `${chData.responseRate}%`
+                          : cand.rrRaw != null
+                            ? `${cand.rrRaw}%`
+                            : "—";
+                      const affDisplay = isNoAttempts
+                        ? "—"
+                        : chData?.affinityScore != null
+                          ? chData.affinityScore.toFixed(1)
+                          : cand.affinityRaw != null
+                            ? cand.affinityRaw.toFixed(1)
+                            : "—";
+
+                      let badgeText = "ELIGIBLE";
+                      let badgeClass =
+                        "bg-blue-500/10 text-blue-700 dark:text-blue-300 border-blue-500/25";
+                      let badgeTitle = "Channel eligible and meeting policy requirements";
+
+                      if (isDnc || !isEligible) {
+                        badgeText = "SUPPRESSED";
+                        badgeClass =
+                          "bg-rose-500/15 text-rose-700 dark:text-rose-300 border-rose-500/30";
+                        badgeTitle =
+                          chData?.restrictionReason || "Channel suppressed by policy or consent";
+                      } else if (isOptimal) {
+                        const attempts = chData?.totalValidAttempts ?? 0;
+                        badgeText =
+                          attempts > 0 && attempts < 3 ? `OPTIMAL (${attempts})` : "OPTIMAL";
+                        badgeClass =
+                          "bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 border-emerald-500/40 font-bold";
+                        badgeTitle =
+                          attempts > 0 && attempts < 3
+                            ? `Recommended primary channel (${attempts} valid attempt(s) — low sample)`
+                            : "Recommended primary channel based on proven history";
+                      } else if (
+                        dataStatus === "NO_ATTEMPTS" ||
+                        (chData?.totalValidAttempts ?? 0) === 0
+                      ) {
+                        badgeText = "NO ATTEMPTS";
+                        badgeClass = "bg-muted text-muted-foreground border-border/50";
+                        badgeTitle = "No recorded contact attempts on this channel";
+                      } else if (
+                        dataStatus === "INSUFFICIENT" ||
+                        (chData?.totalValidAttempts ?? 0) < 3
+                      ) {
+                        const attempts = chData?.totalValidAttempts ?? 1;
+                        badgeText = `LOW (${attempts})`;
+                        badgeClass =
+                          "bg-amber-500/15 text-amber-700 dark:text-amber-300 border-amber-500/30 font-bold";
+                        badgeTitle = `Only ${attempts} valid attempt(s) recorded. Minimum 3 attempts required for full statistical confidence.`;
+                      } else if (affinityVal == null || affinityVal === 0) {
+                        badgeText = "INSUFFICIENT";
+                        badgeClass = "bg-muted text-muted-foreground border-border/50";
+                        badgeTitle = "Channel affinity cannot be computed";
+                      }
+
+                      return (
+                        <div
+                          key={cand.code}
+                          className={`flex items-center justify-between px-2 py-1.5 rounded-lg border text-xs transition ${
+                            isOptimal
+                              ? "bg-primary/10 border-primary/40 shadow-2xs font-semibold"
+                              : "bg-card/70 border-border/60 text-muted-foreground hover:bg-muted/30"
+                          }`}
+                        >
+                          <div className="flex items-center gap-1.5 min-w-0 pr-1">
+                            <cand.icon className="size-3.5 text-primary shrink-0" />
+                            <span className="font-semibold text-foreground text-[11px] whitespace-nowrap shrink-0">
+                              {cand.label}
+                            </span>
+                            <span
+                              title={badgeTitle}
+                              className={`rounded-sm text-[7.5px] font-extrabold uppercase px-1 py-0.5 border whitespace-nowrap shrink-0 ${badgeClass}`}
+                            >
+                              {badgeText}
+                            </span>
+                          </div>
+
+                          <div className="flex items-center gap-1 font-mono text-[10.5px] tabular-nums shrink-0">
+                            <span className="w-9 text-center text-foreground font-semibold">
+                              {csrDisplay}
+                            </span>
+                            <span className="w-9 text-center text-foreground font-semibold">
+                              {rrDisplay}
+                            </span>
+                            <span
+                              className={`w-11 text-center font-bold ${isOptimal ? "text-primary text-[11px]" : "text-foreground"}`}
+                            >
+                              {affDisplay}
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
-              </div>
-            </div>
-
-            {/* COLLECTOR ACTION STATUS & CONTROLS */}
-            <div className="mt-4 border-t pt-3 space-y-2">
-              <div className="flex items-center justify-between text-xs">
-                <span className="text-muted-foreground text-[11px]">Collector Action:</span>
-                <span
-                  className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${
-                    collectorStatus === "APPROVED"
-                      ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400"
-                      : collectorStatus === "EDITED"
-                        ? "bg-purple-500/15 text-purple-600 dark:text-purple-400"
-                        : "bg-amber-500/15 text-amber-600 dark:text-amber-400"
-                  }`}
-                >
-                  Status · {collectorStatus}
-                </span>
-              </div>
-
-              <div className="grid grid-cols-2 gap-2 pt-1">
-                <button
-                  type="button"
-                  disabled={collectorStatus === "APPROVED"}
-                  onClick={() => {
-                    setCollectorStatus("APPROVED");
-                    toast.success(`Outreach recommendation approved via ${activeChannel.name}`);
-                  }}
-                  className={`rounded-lg py-1.5 text-xs font-bold transition shadow-xs flex items-center justify-center gap-1 ${
-                    collectorStatus === "APPROVED"
-                      ? "bg-emerald-600 text-white cursor-default"
-                      : "bg-emerald-600 hover:bg-emerald-700 text-white"
-                  }`}
-                >
-                  <Check className="size-3" /> Approve
-                </button>
-
-                <button
-                  type="button"
-                  disabled={collectorStatus === "REJECTED"}
-                  onClick={() => {
-                    setCollectorStatus("REJECTED");
-                    setRejectionReason("Declined by collector");
-                    toast.info("Outreach recommendation declined");
-                  }}
-                  className="rounded-lg border border-rose-500/30 bg-rose-500/10 hover:bg-rose-500/20 py-1.5 text-xs font-bold text-rose-700 dark:text-rose-300 transition shadow-xs flex items-center justify-center gap-1 disabled:opacity-40 disabled:cursor-not-allowed"
-                >
-                  <X className="size-3" /> Reject
-                </button>
               </div>
             </div>
           </div>
@@ -916,192 +1827,122 @@ function CustomerDetailView() {
         </div>
         */}
 
-        {/* Card 5: Business Scorecard */}
+        {/* Card 5: Account Recovery Snapshot */}
         <div className="rounded-2xl border border-border/80 bg-card p-5 shadow-xs">
-          <div className="flex items-center justify-between mb-3.5">
+          <div className="mb-3.5 flex flex-wrap items-center justify-between gap-2">
             <div>
-              <h3 className="text-sm font-bold text-foreground flex items-center gap-1.5">
-                <BarChart3 className="size-4 text-primary" />
-                <span>Business Scorecard</span>
+              <h3 className="flex items-center gap-1.5 text-sm font-bold text-foreground">
+                <Activity className="size-4 text-primary" />
+                <span>Account Recovery Snapshot</span>
                 <InfoTooltip
-                  title="Borrower Business Scorecard"
-                  content="A multi-dimensional behavioral credit scorecard that evaluates this customer's debt exposure, payment adherence discipline, and omnichannel response velocity."
-                  impact="Used by the Next Best Action engine to customize settlement strategies and message tone."
+                  title="Account Recovery Snapshot"
+                  content="A current view of delinquency stage, the latest recorded payment commitment, and outstanding exposure for the selected account."
+                  impact="Review the promise amount, due date, and recorded status alongside the account's balances."
                 />
               </h3>
+              <p className="mt-0.5 text-xs text-muted-foreground">
+                Delinquency status, payment commitment, and outstanding exposure
+              </p>
             </div>
+            {(liveCustomer?.snapshotDate || activeNba?.snapshotDate) && (
+              <span className="text-[10.5px] text-muted-foreground">
+                Snapshot {liveCustomer?.snapshotDate ?? activeNba?.snapshotDate}
+              </span>
+            )}
           </div>
 
-          {/* 4 CORE OPERATIONAL METRICS IN RESPONSIVE GRID */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-            {/* 1. Outstanding Balance */}
-            <div className="rounded-xl border border-border/70 bg-muted/20 p-3.5 flex flex-col justify-between">
-              <div>
-                <div className="flex items-center gap-1.5">
-                  <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
-                    Outstanding Balance
-                  </span>
-                  <InfoTooltip
-                    title="Current Overdue Balance & DPD"
-                    content="The active delinquent balance owed including past-due principal, interest, and penalties alongside Days Past Due (DPD) aging."
-                    impact="Determines legal urgency, concession eligibility, and collector mandate authority."
-                  />
-                </div>
-                <div className="mt-1.5 flex items-baseline justify-between">
-                  <span className="text-xl font-black text-foreground">
-                    <AnimatedKpi value={c.exp} prefix="$" />
-                  </span>
-                  <span
-                    className={`rounded-md px-1.5 py-0.5 text-[9.5px] font-bold ${
-                      c.dpd >= 90
-                        ? "bg-rose-500/15 text-rose-600 dark:text-rose-400 border border-rose-500/30"
-                        : c.dpd >= 31
-                          ? "bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/30"
-                          : c.dpd >= 1
-                            ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30"
-                            : "bg-sky-500/15 text-sky-600 dark:text-sky-400 border border-sky-500/30"
-                    }`}
-                  >
-                    {c.dpd === 0 ? "Current" : `${c.dpd} DPD`}
-                  </span>
-                </div>
-              </div>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <div className="rounded-xl border border-border/70 bg-muted/20 p-3.5">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+                Delinquency Stage
+              </span>
+              <div className="mt-2 text-xl font-black text-foreground">{c.dpd} DPD</div>
+              <span className="mt-1 block text-[10.5px] font-semibold text-muted-foreground">
+                {dpdStatusLabel} · {riskBucket}
+              </span>
             </div>
 
-            {/* 2. Payment Fulfillment */}
-            <div className="rounded-xl border border-border/70 bg-muted/20 p-3.5 flex flex-col justify-between">
-              <div>
-                <div className="flex items-center gap-1.5">
-                  <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
-                    Payment Fulfillment
-                  </span>
-                  <InfoTooltip
-                    title="Payment Fulfillment Rate"
-                    content="Percentage of the total required repayment commitment actually settled by the borrower during prior billing and cure cycles."
-                    impact="Differentiates between full settlement ability, partial cash-flow distress, and severe default."
-                  />
-                </div>
-                <div className="mt-1.5 flex items-baseline justify-between">
+            <div className="rounded-xl border border-border/70 bg-muted/20 p-3.5">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+                  Promise-to-Pay
+                </span>
+                {latestPromise && promiseStatus && (
                   <span
-                    className={`text-xl font-black ${
-                      c.cov >= 70
-                        ? "text-emerald-600 dark:text-emerald-400"
-                        : c.cov >= 40
-                          ? "text-amber-600 dark:text-amber-400"
-                          : "text-rose-600 dark:text-rose-400"
+                    className={`rounded-full px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide ${
+                      promiseStatus.toLowerCase().includes("fulfill") ||
+                      promiseStatus.toLowerCase().includes("kept")
+                        ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+                        : promiseStatus.toLowerCase().includes("pending")
+                          ? "bg-amber-500/10 text-amber-700 dark:text-amber-300"
+                          : "bg-rose-500/10 text-rose-600 dark:text-rose-400"
                     }`}
                   >
-                    <AnimatedKpi value={c.cov} suffix="%" />
+                    {promiseStatus}
                   </span>
-                  <span
-                    className={`text-[10.5px] font-bold ${
-                      c.cov >= 70
-                        ? "text-emerald-600 dark:text-emerald-400"
-                        : c.cov >= 40
-                          ? "text-amber-600 dark:text-amber-400"
-                          : "text-rose-600 dark:text-rose-400"
-                    }`}
-                  >
-                    {c.repaymentType}
-                  </span>
-                </div>
-                <div className="mt-2 h-1.5 w-full rounded-full bg-muted overflow-hidden">
-                  <div
-                    className={`h-full rounded-full transition-all duration-1000 ease-out ${
-                      c.cov >= 70 ? "bg-emerald-500" : c.cov >= 40 ? "bg-amber-500" : "bg-rose-500"
-                    }`}
-                    style={{ width: animateLiveBars ? `${Math.min(100, c.cov)}%` : "0%" }}
-                  />
-                </div>
+                )}
               </div>
+              <div className="mt-2 text-xl font-black text-foreground">
+                {timelineQuery.isLoading
+                  ? "Loading..."
+                  : timelineQuery.isError
+                    ? "Unavailable"
+                    : latestPromise
+                      ? promiseAmount != null
+                        ? `$${promiseAmount.toLocaleString(undefined, { maximumFractionDigits: 2 })}`
+                        : "Amount unavailable"
+                      : "No promise recorded"}
+              </div>
+              <span className="mt-1 block text-[10.5px] text-muted-foreground">
+                {timelineQuery.isLoading
+                  ? "Loading commitment details"
+                  : timelineQuery.isError
+                    ? "Commitment history unavailable"
+                    : latestPromise && promiseDate
+                      ? `Due ${formatTimelineDate(promiseDate)}`
+                      : latestPromise
+                        ? "Due date unavailable"
+                        : "No payment commitment on record"}
+              </span>
             </div>
 
-            {/* 3. Payment Success Rate */}
-            <div className="rounded-xl border border-border/70 bg-muted/20 p-3.5 flex flex-col justify-between">
-              <div>
-                <div className="flex items-center gap-1.5">
-                  <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
-                    Payment Success Rate
-                  </span>
-                  <InfoTooltip
-                    title="Payment Commitment Success Rate"
-                    content="The percentage of Promise-to-Pay (PTP) agreements this borrower kept versus promises broken."
-                    impact="Borrowers with >=70% rate qualify for fee waivers; lower rates mandate upfront token deposits."
-                  />
-                </div>
-                <div className="mt-1.5 flex items-baseline justify-between">
-                  <span
-                    className={`text-xl font-black ${
-                      paymentSuccessRate >= 70
-                        ? "text-emerald-600 dark:text-emerald-400"
-                        : paymentSuccessRate >= 40
-                          ? "text-amber-600 dark:text-amber-400"
-                          : "text-rose-600 dark:text-rose-400"
-                    }`}
-                  >
-                    <AnimatedKpi value={paymentSuccessRate} suffix="%" />
-                  </span>
-                  <span className="text-[10.5px] font-semibold text-muted-foreground">
-                    {c.pays} of {Math.max(1, c.pays + (c.cov < 100 ? 1 : 0))} fulfilled
-                  </span>
-                </div>
-                <div className="mt-2 h-1.5 w-full rounded-full bg-muted overflow-hidden">
-                  <div
-                    className={`h-full rounded-full transition-all duration-1000 ease-out ${
-                      paymentSuccessRate >= 70
-                        ? "bg-emerald-500"
-                        : paymentSuccessRate >= 40
-                          ? "bg-amber-500"
-                          : "bg-rose-500"
-                    }`}
-                    style={{ width: animateLiveBars ? `${Math.min(100, paymentSuccessRate)}%` : "0%" }}
-                  />
-                </div>
+            <div className="rounded-xl border border-border/70 bg-muted/20 p-3.5">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+                Past-Due Amount
+              </span>
+              <div className="mt-2 text-xl font-black text-foreground">
+                ${pastDueAmt.toLocaleString()}
               </div>
+              <span className="mt-1 block text-[10.5px] text-muted-foreground">
+                Current overdue exposure
+              </span>
             </div>
 
-            {/* 4. Contact Success Rate */}
-            <div className="rounded-xl border border-border/70 bg-muted/20 p-3.5 flex flex-col justify-between">
-              <div>
-                <div className="flex items-center gap-1.5">
-                  <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
-                    Contact Success Rate
-                  </span>
-                  <InfoTooltip
-                    title="Contact Channel Success Rate"
-                    content="Historical engagement rate specifically through the recommended outreach channel (e.g., Phone, WhatsApp, Field Visit)."
-                    impact="Directs collectors to reach the borrower on channels where they have the highest probability of answering."
-                  />
-                </div>
-                <div className="mt-1.5 flex items-baseline justify-between">
-                  <span
-                    className={`text-xl font-black ${
-                      activeChannel.successRate >= 65
-                        ? "text-emerald-600 dark:text-emerald-400"
-                        : activeChannel.successRate >= 45
-                          ? "text-amber-600 dark:text-amber-400"
-                          : "text-rose-600 dark:text-rose-400"
-                    }`}
-                  >
-                    <AnimatedKpi value={activeChannel.successRate} suffix="%" />
-                  </span>
-                  <span className="text-[10.5px] font-semibold text-muted-foreground">
-                    {activeChannel.name}
-                  </span>
-                </div>
-                <div className="mt-2 h-1.5 w-full rounded-full bg-muted overflow-hidden">
-                  <div
-                    className={`h-full rounded-full transition-all duration-1000 ease-out ${
-                      activeChannel.successRate >= 65
-                        ? "bg-emerald-500"
-                        : activeChannel.successRate >= 45
-                          ? "bg-amber-500"
-                          : "bg-rose-500"
-                    }`}
-                    style={{ width: animateLiveBars ? `${Math.min(100, activeChannel.successRate)}%` : "0%" }}
-                  />
-                </div>
+            <div className="rounded-xl border border-border/70 bg-muted/20 p-3.5">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+                Remaining Balance
+              </span>
+              <div className="mt-2 text-xl font-black text-foreground">
+                ${remainingBal.toLocaleString()}
               </div>
+              {overdueShare != null ? (
+                <div className="mt-2">
+                  <div className="mb-1 flex justify-between text-[10px] text-muted-foreground">
+                    <span>Past due share</span>
+                    <span className="font-semibold text-foreground">{overdueShare}%</span>
+                  </div>
+                  <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+                    <div
+                      className="h-full rounded-full bg-primary"
+                      style={{ width: `${Math.min(100, Math.max(0, overdueShare))}%` }}
+                    />
+                  </div>
+                </div>
+              ) : (
+                <span className="mt-1 block text-[10.5px] text-muted-foreground">
+                  Past-due share unavailable
+                </span>
+              )}
             </div>
           </div>
         </div>
@@ -1114,210 +1955,286 @@ function CustomerDetailView() {
               <div className="flex-1 flex flex-col">
                 <div className="flex items-center justify-between gap-2 flex-wrap mb-4">
                   <div>
-                    <div className="flex items-center gap-2">
-                      <h3 className="text-sm font-bold text-foreground">Activity timeline</h3>
-                      <span className="inline-flex items-center gap-1 rounded-full bg-red-500/10 border border-red-500/25 px-2 py-0.5 text-[10px] font-bold text-red-600 dark:text-red-400">
-                        <User className="size-2.5 text-red-600 dark:text-red-400" /> Live Journey
-                      </span>
-                    </div>
+                    <h3 className="text-sm font-bold text-foreground">Activity timeline</h3>
                     <p className="text-xs text-muted-foreground mt-0.5">
-                      Recent outreach, approvals and repayment events
+                      Recent outreach, messages, approvals and repayment events
                     </p>
                   </div>
-
-                  <div className="flex items-center gap-1.5">
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setActiveTimelineStep((prev) => (prev + 1) % timelineList.length)
-                      }
-                      className="inline-flex items-center gap-1 rounded-lg border border-border/80 bg-muted/40 hover:bg-muted px-2 py-1 text-[10.5px] font-bold text-foreground transition cursor-pointer"
-                      title="Advance live person marker to next event"
-                    >
-                      <User className="size-3 text-red-600 dark:text-red-400 animate-pulse" />
-                      <span>Step Proceed</span>
-                      <ChevronRight className="size-3 text-muted-foreground" />
-                    </button>
-                    <span className="rounded-full bg-muted px-2.5 py-0.5 text-[11px] font-semibold text-muted-foreground">
-                      {timelineList.length} events logged
-                    </span>
-                  </div>
+                  <span className="rounded-full bg-muted px-2.5 py-0.5 text-[11px] font-semibold text-muted-foreground">
+                    {timelineData?.meta?.total ?? timelineList.length} events logged
+                  </span>
                 </div>
 
-                {/* Vertical timeline distributing events across vertical space */}
-                <div className="relative border-l-2 border-border/70 ml-3 pl-4 flex-1 flex flex-col justify-between py-1.5 space-y-3.5">
-                  {timelineList.map((item, i) => {
-                    const isCurrent = i === activeTimelineStep;
-                    const isCompleted = i < activeTimelineStep;
-
-                    return (
-                      <div
-                        key={i}
-                        onClick={() => setActiveTimelineStep(i)}
-                        style={
-                          isCurrent
-                            ? {
-                                background:
-                                  "linear-gradient(135deg, #DBEAFE 0%, #E0F2FE 45%, #EDE9FE 100%)",
-                                borderColor: "#3B82F6",
-                                boxShadow:
-                                  "0 4px 20px -2px rgba(59, 130, 246, 0.28), 0 0 12px rgba(99, 102, 241, 0.20)",
-                              }
-                            : undefined
-                        }
-                        className={`relative rounded-xl border-2 p-3.5 text-xs transition-all duration-300 cursor-pointer ${
-                          isCurrent
-                            ? "dark:border-blue-400 dark:bg-gradient-to-r dark:from-blue-950/60 dark:via-sky-950/50 dark:to-indigo-950/60 ring-1 ring-blue-500/40 scale-[1.01]"
-                            : isCompleted
-                              ? "border-emerald-500/35 bg-gradient-to-r from-emerald-500/[0.08] via-teal-500/[0.04] to-card/90 dark:from-emerald-500/[0.14] dark:to-card/80 shadow-xs ring-1 ring-emerald-500/20 hover:border-emerald-500/50"
-                              : "border-border/60 bg-gradient-to-r from-muted/25 via-muted/15 to-card/60 hover:bg-muted/40 hover:border-border"
-                        }`}
-                      >
-                        {/* Progress line overlay for completed stages */}
-                        {isCompleted && (
-                          <span className="absolute -left-[18px] top-3 -bottom-3.5 w-0.5 bg-emerald-500 z-10 transition-all duration-500" />
-                        )}
-
-                        {/* Node: Current (Red Person) vs Completed (Green Check) vs Upcoming (Neutral Dot) */}
-                        {isCurrent ? (
-                          <div
-                            className="absolute -left-[28px] top-3 z-20 flex items-center justify-center transition-all duration-500 ease-out"
-                            title="Current Active Stage"
-                          >
-                            <span className="absolute size-7 rounded-full bg-red-500/35 animate-ping" />
-                            <div className="size-6 rounded-full bg-red-600 text-white flex items-center justify-center shadow-md ring-2 ring-card scale-110">
-                              <User className="size-3.5 stroke-[2.5]" />
-                            </div>
-                          </div>
-                        ) : isCompleted ? (
-                          <div
-                            className="absolute -left-[28px] top-3 z-20 flex items-center justify-center transition-all duration-500 ease-out"
-                            title="Completed Stage"
-                          >
-                            <div className="size-6 rounded-full bg-emerald-600 text-white flex items-center justify-center shadow-sm ring-2 ring-card hover:scale-110 transition-transform">
-                              <Check className="size-3.5 stroke-[3]" />
-                            </div>
-                          </div>
-                        ) : (
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setActiveTimelineStep(i);
-                            }}
-                            title="Click to jump active collector position here"
-                            className="absolute -left-[23px] top-4 size-2.5 rounded-full border-2 border-card cursor-pointer hover:scale-150 transition-all bg-slate-400 dark:bg-slate-600 hover:bg-primary"
-                          />
-                        )}
-
-                        {/* Card Title & Top-Right Live/Status Badge */}
-                        <div className="flex items-start justify-between gap-2 flex-wrap">
-                          <div
-                            className={`font-extrabold text-xs leading-snug flex-1 ${
-                              isCurrent ? "text-slate-900 dark:text-slate-50" : "text-foreground"
-                            }`}
-                          >
-                            {item.title}
-                          </div>
-
-                          <div className="flex items-center gap-2 shrink-0">
-                            {/* Live Badge in Red on Top Right for Current Stage */}
-                            {isCurrent && (
-                              <span className="inline-flex items-center gap-1.5 rounded-full bg-rose-600 text-white px-2.5 py-0.5 text-[9.5px] font-black uppercase tracking-wider shadow-xs">
-                                <span className="size-1.5 rounded-full bg-white animate-pulse" /> LIVE
-                              </span>
-                            )}
-
-                            {/* Completed Status Pill for Completed Stages */}
-                            {isCompleted && (
-                              <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 border border-emerald-500/30 px-2 py-0.5 text-[9px] font-bold text-emerald-600 dark:text-emerald-400">
-                                <Check className="size-2.5 stroke-[3]" /> Completed
-                              </span>
-                            )}
-
-                            <span
-                              className={`text-[11px] ${
-                                isCurrent
-                                  ? "text-slate-600 dark:text-slate-300 font-bold"
-                                  : "text-muted-foreground"
-                              }`}
-                            >
-                              {item.time}
-                            </span>
-                          </div>
-                        </div>
-
-                        {/* Original Category & Status Badges */}
-                        <div className="mt-2.5 flex items-center gap-1.5 flex-wrap">
-                          <span
-                            className={`rounded-md px-2 py-0.5 text-[10px] font-bold ${
-                              isCurrent
-                                ? "bg-blue-600/15 text-blue-900 dark:text-blue-100 border border-blue-500/35"
-                                : item.category === "Next Best Action"
-                                  ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20"
-                                  : "bg-primary/10 text-primary"
-                            }`}
-                          >
-                            {item.category}
-                          </span>
-                          <span
-                            className={`rounded-md px-2 py-0.5 text-[10px] font-bold ${
-                              isCurrent
-                                ? "bg-emerald-600/20 text-emerald-950 dark:text-emerald-100 border border-emerald-500/40"
-                                : isCompleted
-                                  ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-500/25"
-                                  : "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
-                            }`}
-                          >
-                            {item.status}
-                          </span>
-                        </div>
+                {/* Vertical timeline: chronological events from the recorded history */}
+                <div className="relative border-l-2 border-border/70 ml-3 pl-4 py-1 flex-1 flex flex-col">
+                  {timelineQuery.isLoading ? (
+                    <div className="space-y-3">
+                      {[0, 1, 2].map((k) => (
+                        <div key={k} className="h-[72px] rounded-xl bg-muted/40 animate-pulse" />
+                      ))}
+                    </div>
+                  ) : timelineQuery.isError ? (
+                    <div className="rounded-xl border border-rose-500/30 bg-rose-500/5 p-4 text-xs space-y-2">
+                      <div className="flex items-center gap-1.5 font-bold text-rose-600 dark:text-rose-400">
+                        <AlertTriangle className="size-3.5" /> Activity history could not be loaded
                       </div>
-                    );
-                  })}
+                      <p className="text-muted-foreground">
+                        The recorded-events service is unavailable. No events are shown until the
+                        connection is restored.
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => void timelineQuery.refetch()}
+                        className="inline-flex items-center gap-1.5 rounded-lg border border-border/70 bg-card px-2.5 py-1 font-bold text-foreground hover:bg-muted transition cursor-pointer"
+                      >
+                        <RotateCcw className="size-3" /> Retry
+                      </button>
+                    </div>
+                  ) : timelineList.length === 0 ? (
+                    <div className="rounded-xl border border-dashed border-border/70 p-4 text-xs text-muted-foreground">
+                      <div className="flex items-center gap-1.5 font-bold text-foreground">
+                        <FileText className="size-3.5" /> No recorded activity yet
+                      </div>
+                      <p className="mt-1 leading-relaxed">
+                        Outreach, message, payment and decision events will appear here as they are
+                        recorded for this account.
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      {timelineList.map((item) => {
+                        const isSelected =
+                          selectedTimelineEventId != null &&
+                          selectedTimelineEventId === item.eventId;
+                        const isLive = item.isLatest === true;
+                        const dotTone =
+                          item.tone === "green"
+                            ? "bg-emerald-500/70"
+                            : item.tone === "rose"
+                              ? "bg-rose-500/70"
+                              : item.tone === "amber"
+                                ? "bg-amber-500/70"
+                                : "bg-slate-400/70 dark:bg-slate-500";
+                        const statusTone =
+                          item.tone === "green"
+                            ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+                            : item.tone === "rose"
+                              ? "bg-rose-500/10 text-rose-600 dark:text-rose-400"
+                              : item.tone === "amber"
+                                ? "bg-amber-500/10 text-amber-600 dark:text-amber-400"
+                                : "bg-primary/10 text-primary";
+
+                        return (
+                          <div
+                            key={item.eventId ?? `${item.title}-${item.time}`}
+                            onClick={() => {
+                              setSelectedTimelineEventId(item.eventId ?? null);
+                              const outcome = parseTimelineOutcome(
+                                c.id,
+                                activeAccountId ?? undefined,
+                                item,
+                              );
+                              setSelectedTimelineOutcome(outcome);
+                            }}
+                            style={
+                              isLive
+                                ? {
+                                    background:
+                                      "linear-gradient(135deg, #DBEAFE 0%, #E0F2FE 45%, #EDE9FE 100%)",
+                                    borderColor: "#3B82F6",
+                                  }
+                                : undefined
+                            }
+                            className={`relative rounded-xl p-3.5 text-xs transition cursor-pointer ${
+                              isSelected
+                                ? isLive
+                                  ? "border-2 ring-2 ring-blue-500/40 shadow-sm"
+                                  : "border border-primary/50 bg-primary/[0.05] ring-1 ring-primary/25"
+                                : isLive
+                                  ? "border-2 ring-1 ring-blue-500/40 shadow-sm hover:-translate-y-px hover:shadow"
+                                  : "border border-border/60 bg-gradient-to-r from-muted/25 via-muted/15 to-card/60 hover:bg-muted/40 hover:border-border hover:-translate-y-px"
+                            }`}
+                          >
+                            {/* Node icon on the live card; plain dots for history */}
+                            {isLive ? (
+                              <div
+                                className="absolute -left-[28px] top-3 z-10 flex size-6 items-center justify-center"
+                                title={item.category}
+                              >
+                                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-rose-500 opacity-30" />
+                                <span className="relative flex size-6 items-center justify-center rounded-full border-2 border-white bg-rose-600 text-white shadow-sm ring-1 ring-rose-500/50 dark:border-card">
+                                  <User className="size-3 stroke-[2.5]" />
+                                </span>
+                              </div>
+                            ) : (
+                              <div
+                                className={`absolute -left-[21px] top-[18px] z-10 size-2.5 rounded-full ring-2 ring-card ${dotTone}`}
+                                title={item.category}
+                              />
+                            )}
+
+                            <div className="flex items-start justify-between gap-2 flex-wrap">
+                              <div className="font-extrabold text-xs leading-snug flex-1 text-foreground">
+                                {item.title}
+                              </div>
+                              <div className="flex items-center gap-2 shrink-0">
+                                {isLive && (
+                                  <span className="inline-flex items-center gap-1.5 rounded-full bg-rose-600 px-2.5 py-1 text-[9px] font-black uppercase tracking-wider text-white shadow-sm">
+                                    <span className="relative flex size-2">
+                                      <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-white opacity-75" />
+                                      <span className="relative inline-flex size-2 rounded-full bg-white" />
+                                    </span>
+                                    Live
+                                  </span>
+                                )}
+                                <span className="text-[11px] text-muted-foreground">
+                                  {formatTimelineDate(item.time)}
+                                </span>
+                              </div>
+                            </div>
+
+                            <div className="mt-2.5 flex items-center gap-1.5 flex-wrap">
+                              <span className="rounded-md bg-primary/10 px-2 py-0.5 text-[10px] font-bold text-primary">
+                                {item.category}
+                              </span>
+                              <span
+                                className={`rounded-md px-2 py-0.5 text-[10px] font-bold ${statusTone}`}
+                              >
+                                {item.status}
+                              </span>
+                              {item.amount != null && item.amount > 0 && (
+                                <span className="rounded-md bg-muted px-2 py-0.5 text-[10px] font-bold text-foreground">
+                                  ${item.amount.toLocaleString()}
+                                </span>
+                              )}
+                              {item.details?.ptpAmount != null && item.details.ptpAmount > 0 && (
+                                <span className="rounded-md bg-amber-500/15 px-2 py-0.5 text-[10px] font-bold text-amber-800 dark:text-amber-300">
+                                  PTP ${item.details.ptpAmount.toLocaleString()}
+                                </span>
+                              )}
+                              {item.channelName && (
+                                <span className="text-[10px] font-semibold text-muted-foreground">
+                                  {item.channelName}
+                                </span>
+                              )}
+                            </div>
+
+                            {item.details && (
+                              <div className="mt-2.5 rounded-lg border border-border/50 bg-background/60 px-2.5 py-2 space-y-1 text-[11px] text-muted-foreground">
+                                {item.details.messageTemplate && (
+                                  <div className="flex items-baseline justify-between gap-2 flex-wrap">
+                                    <span>
+                                      <span className="font-semibold text-foreground/80">
+                                        Message:
+                                      </span>{" "}
+                                      {item.details.messageTemplate}
+                                      {item.details.messageStage
+                                        ? ` · ${item.details.messageStage}`
+                                        : ""}
+                                    </span>
+                                  </div>
+                                )}
+                                {item.details.paymentAmount != null &&
+                                  item.details.paymentAmount > 0 && (
+                                    <div>
+                                      <span className="font-semibold text-foreground/80">
+                                        Payment received:
+                                      </span>{" "}
+                                      <span className="font-semibold text-emerald-700 dark:text-emerald-300">
+                                        $
+                                        {item.details.paymentAmount.toLocaleString(undefined, {
+                                          minimumFractionDigits: 2,
+                                          maximumFractionDigits: 2,
+                                        })}
+                                      </span>
+                                      {item.details.paymentStatus
+                                        ? ` (${item.details.paymentStatus})`
+                                        : ""}
+                                      {item.details.appliedDueDate
+                                        ? ` · applied to due ${formatTimelineDate(item.details.appliedDueDate)}`
+                                        : ""}
+                                    </div>
+                                  )}
+                                {item.details.ptpAmount != null && item.details.ptpAmount > 0 && (
+                                  <div>
+                                    <span className="font-semibold text-foreground/80">
+                                      Promise to pay:
+                                    </span>{" "}
+                                    <span className="font-semibold text-foreground">
+                                      $
+                                      {item.details.ptpAmount.toLocaleString(undefined, {
+                                        minimumFractionDigits: 2,
+                                        maximumFractionDigits: 2,
+                                      })}
+                                    </span>
+                                    {item.details.ptpDate
+                                      ? ` due ${formatTimelineDate(item.details.ptpDate)}`
+                                      : ""}
+                                    {item.details.ptpStatus ? ` · ${item.details.ptpStatus}` : ""}
+                                    {item.details.ptpMode ? ` · ${item.details.ptpMode}` : ""}
+                                  </div>
+                                )}
+                                {(item.details.disposition ||
+                                  item.details.reaction ||
+                                  item.details.commitment) && (
+                                  <div>
+                                    <span className="font-semibold text-foreground/80">
+                                      Response:
+                                    </span>{" "}
+                                    {[
+                                      item.details.disposition,
+                                      item.details.reaction,
+                                      item.details.commitment,
+                                    ]
+                                      .filter(Boolean)
+                                      .join(" · ")}
+                                  </div>
+                                )}
+                                {item.details.notes && (
+                                  <div className="italic text-muted-foreground/90">
+                                    Note: {item.details.notes}
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  {/* Next scheduled action — from prioritized action / cadence engine */}
+                  {timelineNextAction && timelineNextAction.nextContactDate && (
+                    <div className="relative rounded-xl border border-dashed border-primary/45 bg-gradient-to-r from-primary/[0.04] to-card p-3.5 text-xs mt-3">
+                      <div className="absolute -left-[28px] top-4 z-10 size-5 rounded-full bg-primary text-primary-foreground flex items-center justify-center shadow-xs ring-2 ring-card">
+                        <CalendarClock className="size-3" />
+                      </div>
+                      <div className="flex items-start justify-between gap-2 flex-wrap">
+                        <div className="font-extrabold text-xs text-foreground">
+                          Pending Frontline Action: {actionHeadline}
+                        </div>
+                        <span className="inline-flex items-center gap-1 rounded-full bg-primary/10 border border-primary/30 px-2.5 py-0.5 text-[9.5px] font-black uppercase tracking-wider text-primary">
+                          Recommended
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-muted-foreground mt-1.5 leading-relaxed">
+                        {timelineNextAction.channelName ?? channelDisplayLabel} via{" "}
+                        {timelineNextAction.cadence ?? "standard cadence"} — next contact due{" "}
+                        {formatTimelineDate(timelineNextAction.nextContactDate)} · status{" "}
+                        {timelineNextAction.actionStatus ?? "PENDING"}. Record the borrower response
+                        below.
+                      </p>
+                    </div>
+                  )}
                 </div>
               </div>
 
               {/* Bottom Activity Timeline Actions */}
-              <div className="mt-5 border-t border-border/70 pt-4 flex items-center justify-between gap-2 flex-wrap">
-                <div className="flex items-center gap-2">
-                  <span className="text-[11px] font-semibold text-muted-foreground">Action taken?</span>
-                  <div className="flex items-center gap-1 p-0.5 rounded-lg bg-muted border border-border/70 shadow-xs">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setActionTaken("YES");
-                        setDrawerOpen(true);
-                      }}
-                      className={`px-2.5 py-1 rounded-md text-[11px] font-bold transition flex items-center gap-1 cursor-pointer ${
-                        actionTaken === "YES"
-                          ? "bg-emerald-600 text-white shadow-xs"
-                          : "text-foreground hover:bg-card"
-                      }`}
-                    >
-                      <Check className="size-2.5" /> Yes
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setActionTaken("NO");
-                        setNoActionModalOpen(true);
-                      }}
-                      className={`px-2.5 py-1 rounded-md text-[11px] font-bold transition flex items-center gap-1 cursor-pointer ${
-                        actionTaken === "NO"
-                          ? "bg-rose-600 text-white shadow-xs"
-                          : "text-foreground hover:bg-card"
-                      }`}
-                    >
-                      <X className="size-2.5" /> No
-                    </button>
-                  </div>
-                </div>
-
+              <div className="mt-5 border-t border-border/70 pt-4 flex items-center justify-end gap-2 flex-wrap">
                 <button
                   type="button"
                   onClick={() => {
-                    setActionTaken("YES");
+                    setSelectedOutcomePresetId("");
                     setDrawerOpen(true);
                   }}
                   className="inline-flex items-center gap-2 rounded-xl bg-primary px-4 py-2 text-xs font-bold text-primary-foreground shadow-sm hover:bg-primary/90 transition cursor-pointer"
@@ -1328,141 +2245,307 @@ function CustomerDetailView() {
             </div>
           </div>
 
-          {/* RIGHT: Next Best Action Card with Customer Recovery Snapshot */}
+          {/* RIGHT: Business-Friendly Next Best Action Decision Support Dashboard */}
           <div className="lg:col-span-7 h-full">
             <div className="rounded-2xl border border-border/80 bg-card p-5 sm:p-6 shadow-xs flex flex-col justify-between h-full space-y-4">
               <div className="space-y-4">
-                {/* 1. NEXT BEST ACTION HEADER */}
-                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pb-3.5 border-b border-border/70">
-                  <div className="space-y-1.5">
+                {/* 1. PROMINENT MAIN RECOMMENDATION HERO SECTION (Master Prompt Sections 2 & 8) */}
+                <div className="rounded-xl border border-primary/25 bg-gradient-to-br from-primary/5 via-card to-card p-4 sm:p-5 space-y-3.5">
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
                     <div className="flex items-center gap-2">
-                      <Sparkles className="size-4 text-primary" />
-                      <h3 className="text-sm font-bold uppercase tracking-wider text-primary">
+                      <Sparkles className="size-4 text-primary shrink-0" />
+                      <span className="text-[11px] font-extrabold uppercase tracking-wider text-primary">
                         Next Best Action
-                      </h3>
+                      </span>
                     </div>
-
-                    {/* Recommended Action Headline & Metadata */}
-                    <div className="flex items-center gap-2.5 pt-0.5 flex-wrap">
-                      <div className="size-9 rounded-xl bg-primary/10 border border-primary/20 flex items-center justify-center text-primary shrink-0 shadow-xs">
-                        <activeChannel.icon className="size-4" />
-                      </div>
-                      <div>
-                        <h3 className="text-base sm:text-lg font-black text-foreground tracking-tight flex items-center gap-2 flex-wrap">
-                          <span>{actionHeadline}</span>
-                          <span className="text-xs font-mono font-bold text-primary">
-                            ({activeChannel.score.toFixed(3)})
-                          </span>
-                        </h3>
-                      </div>
-                    </div>
+                    {nbaPresentation.hero.overriddenFromTitle && (
+                      <span className="rounded-full border border-blue-500/30 bg-blue-500/10 px-2.5 py-0.5 text-[10px] font-bold text-blue-700 dark:text-blue-300">
+                        Changed from: {nbaPresentation.hero.overriddenFromTitle}
+                      </span>
+                    )}
+                    {nbaPresentation.hero.isHold && (
+                      <span className="rounded-full border border-rose-500/30 bg-rose-500/15 px-2.5 py-0.5 text-[10px] font-bold text-rose-700 dark:text-rose-300">
+                        Account on Hold
+                      </span>
+                    )}
                   </div>
 
-                  {/* ACTION BUTTONS: Change Channel, Reject, Accept */}
-                  <div className="flex items-center gap-2 shrink-0 flex-wrap">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setSelectedChannelChoice(activeChannel.name);
-                        setChangeChannelModalOpen(true);
-                      }}
-                      className="rounded-xl border border-border/80 bg-card hover:bg-muted px-2.5 py-1.5 text-xs font-semibold text-foreground transition shadow-xs flex items-center gap-1 cursor-pointer"
-                    >
-                      <Sliders className="size-3 text-primary" /> Change Channel
-                    </button>
+                  {nbaQuery.isError && (
+                    <div className="rounded-lg bg-amber-500/10 border border-amber-500/30 px-2.5 py-1.5 text-[11px] text-amber-800 dark:text-amber-300 flex items-center gap-1.5">
+                      <AlertTriangle className="size-3.5 shrink-0" />
+                      <span>
+                        Recommendation service is temporarily unavailable — showing standard account
+                        guidance.
+                      </span>
+                    </div>
+                  )}
 
-                    <button
-                      type="button"
-                      disabled={collectorStatus === "REJECTED"}
-                      onClick={() => setRejectionModalOpen(true)}
-                      className="rounded-xl border border-rose-500/30 bg-rose-500/10 hover:bg-rose-500/20 text-rose-700 dark:text-rose-300 px-3 py-1.5 text-xs font-bold transition shadow-xs flex items-center gap-1 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
-                    >
-                      <X className="size-3" /> Reject Action
-                    </button>
+                  {nbaQuery.isLoading && !activeNba ? (
+                    <div className="space-y-2">
+                      <div className="h-8 w-72 rounded-xl bg-muted animate-pulse" />
+                      <div className="h-4 w-full rounded bg-muted animate-pulse" />
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      <div className="flex items-start gap-3">
+                        <div
+                          className={`size-10 rounded-xl border flex items-center justify-center shrink-0 shadow-xs mt-0.5 ${
+                            nbaPresentation.hero.isHold
+                              ? "bg-rose-500/10 border-rose-500/30 text-rose-600 dark:text-rose-400"
+                              : "bg-primary/15 border-primary/25 text-primary"
+                          }`}
+                        >
+                          <NbaHeroIcon className="size-5" />
+                        </div>
+                        <div className="space-y-1 min-w-0 flex-1">
+                          <h3 className="text-lg sm:text-xl font-black text-foreground tracking-tight leading-snug">
+                            {nbaPresentation.hero.prefix}: {nbaPresentation.hero.title}
+                          </h3>
+                          <p className="text-xs sm:text-[13px] text-muted-foreground leading-relaxed">
+                            {nbaPresentation.hero.description}
+                          </p>
+                        </div>
+                      </div>
 
+                      {nbaPresentation.hero.quickReasons.length > 0 && (
+                        <div className="rounded-lg bg-background/80 border border-border/70 px-3.5 py-2.5 space-y-1.5">
+                          <div className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+                            Key Reasons
+                          </div>
+                          <ul className="space-y-1">
+                            {nbaPresentation.hero.quickReasons.map((reason, idx) => (
+                              <li
+                                key={idx}
+                                className="flex items-start gap-2 text-xs text-foreground"
+                              >
+                                <CheckCircle2 className="size-3.5 text-primary shrink-0 mt-0.5" />
+                                <span>{reason}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* CLEAR USER DECISION BUTTONS (Section 8) */}
+                  <div className="pt-1 flex flex-wrap items-center gap-2">
                     <button
                       type="button"
-                      disabled={hasPolicyBlock || collectorStatus === "APPROVED"}
-                      onClick={handleApproveNBA}
-                      className={`rounded-xl px-3.5 py-1.5 text-xs font-bold transition shadow-sm flex items-center gap-1 ${
-                        hasPolicyBlock
-                          ? "bg-muted text-muted-foreground cursor-not-allowed border"
+                      disabled={
+                        hasPolicyBlock ||
+                        isHoldSuppressed ||
+                        collectorStatus === "APPROVED" ||
+                        nbaDecisionMutation.isPending
+                      }
+                      onClick={() => void handleApproveNBA()}
+                      className={`rounded-xl px-3.5 py-2 text-xs font-bold transition shadow-sm flex items-center gap-1.5 ${
+                        hasPolicyBlock || isHoldSuppressed
+                          ? "bg-muted text-muted-foreground cursor-not-allowed border border-border"
                           : collectorStatus === "APPROVED"
-                            ? "bg-emerald-600 text-white cursor-default shadow-emerald-500/20"
-                            : "bg-primary text-primary-foreground hover:bg-primary/90 shadow-primary/20 cursor-pointer"
+                            ? "bg-emerald-600 text-white cursor-default"
+                            : "bg-primary text-primary-foreground hover:bg-primary/90 cursor-pointer"
                       }`}
                     >
                       {collectorStatus === "APPROVED" ? (
                         <>
-                          <CheckCircle2 className="size-3" /> Approved
+                          <CheckCircle2 className="size-3.5" /> Approved
+                        </>
+                      ) : isHoldSuppressed || hasPolicyBlock ? (
+                        <>
+                          <Ban className="size-3.5" /> Contact Paused
                         </>
                       ) : (
                         <>
-                          <Check className="size-3" /> Accept Action
+                          <Check className="size-3.5" /> Accept Recommendation
                         </>
                       )}
+                    </button>
+
+                    <button
+                      type="button"
+                      disabled={isHoldSuppressed || hasPolicyBlock}
+                      onClick={() => {
+                        const firstActive =
+                          activeNba && activeNba.recommendedAction !== "ACT_HOLD_SUPPRESS"
+                            ? activeNba.recommendedAction
+                            : activeNba?.eligibleArms.find((a) => a !== "ACT_HOLD_SUPPRESS");
+                        setSelectedArmChoice(
+                          collectorStatus === "EDITED" && overrideActionCode
+                            ? overrideActionCode
+                            : (firstActive ?? "ACT_PHONE_STANDARD"),
+                        );
+                        setChangeChannelModalOpen(true);
+                      }}
+                      className="rounded-xl border border-border/80 bg-card hover:bg-muted disabled:opacity-50 disabled:cursor-not-allowed px-3 py-2 text-xs font-semibold text-foreground transition shadow-xs flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <Sliders className="size-3.5 text-primary" /> Choose Another Action
+                    </button>
+
+                    <button
+                      type="button"
+                      disabled={collectorStatus === "REJECTED" || nbaDecisionMutation.isPending}
+                      onClick={() => setRejectionModalOpen(true)}
+                      className="rounded-xl border border-rose-500/30 bg-rose-500/10 hover:bg-rose-500/20 text-rose-700 dark:text-rose-300 px-3 py-2 text-xs font-bold transition shadow-xs flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                    >
+                      <X className="size-3.5" /> Reject Recommendation
                     </button>
                   </div>
                 </div>
 
-                {/* 2. COMPACT STATUS BANNER */}
-                {collectorStatus === "PENDING" && (
-                  <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-3.5 py-2 flex items-center justify-between gap-2">
-                    <div className="flex items-center gap-2">
-                      <AlertTriangle className="size-3.5 text-amber-600 dark:text-amber-400 shrink-0" />
-                      <span className="text-xs font-bold text-amber-900 dark:text-amber-200">
-                        Review Required — Human Sign-Off Pending
+                {/* WHY ARE WE RECOMMENDING THIS ACTION? (Section 4 — Collapsed by default matching Screenshot 8) */}
+                <div className="rounded-2xl border border-border/80 bg-card overflow-hidden shadow-2xs">
+                  <button
+                    type="button"
+                    onClick={() => setExplanationOpen((prev) => !prev)}
+                    className="w-full px-4 py-3 sm:py-3.5 flex items-center justify-between text-left hover:bg-muted/30 transition cursor-pointer"
+                  >
+                    <div className="flex items-center gap-2.5">
+                      <FileText className="size-4 text-primary shrink-0" />
+                      <span className="text-xs sm:text-sm font-bold text-foreground">
+                        Why are we recommending this action?
                       </span>
                     </div>
-                    <span className="rounded-md bg-amber-500/20 border border-amber-500/30 px-2 py-0.5 text-[10px] font-extrabold uppercase tracking-wider text-amber-800 dark:text-amber-300 shrink-0">
-                      Pending Review
+                    <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-primary">
+                      <span>{explanationOpen ? "Hide explanation" : "Show explanation"}</span>
+                      {explanationOpen ? (
+                        <ChevronUp className="size-4" />
+                      ) : (
+                        <ChevronDown className="size-4" />
+                      )}
                     </span>
-                  </div>
-                )}
+                  </button>
 
-                {collectorStatus === "APPROVED" && (
-                  <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-3.5 py-2 flex items-center justify-between gap-2">
-                    <div className="flex items-center gap-2">
-                      <CheckCircle2 className="size-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
-                      <span className="text-xs font-bold text-emerald-900 dark:text-emerald-200">
-                        Review Completed — Approved for Execution
-                      </span>
+                  {explanationOpen && (
+                    <div className="p-4 pt-3 border-t border-border/70 grid grid-cols-1 sm:grid-cols-2 gap-3 text-[11.5px] bg-muted/15">
+                      <div className="rounded-xl bg-card border border-border/70 p-3.5 space-y-1 shadow-2xs">
+                        <div className="text-[10px] font-extrabold uppercase tracking-wider text-primary">
+                          A. Customer Engagement
+                        </div>
+                        <p className="text-muted-foreground leading-relaxed">
+                          {nbaPresentation.explanationSections.customerEngagement}
+                        </p>
+                      </div>
+                      <div className="rounded-xl bg-card border border-border/70 p-3.5 space-y-1 shadow-2xs">
+                        <div className="text-[10px] font-extrabold uppercase tracking-wider text-primary">
+                          B. Payment Behaviour
+                        </div>
+                        <p className="text-muted-foreground leading-relaxed">
+                          {nbaPresentation.explanationSections.paymentBehaviour}
+                        </p>
+                      </div>
+                      <div className="rounded-xl bg-card border border-border/70 p-3.5 space-y-1 shadow-2xs">
+                        <div className="text-[10px] font-extrabold uppercase tracking-wider text-primary">
+                          C. Recent Follow-up Activity
+                        </div>
+                        <p className="text-muted-foreground leading-relaxed">
+                          {nbaPresentation.explanationSections.recentFollowUp}
+                        </p>
+                      </div>
+                      <div className="rounded-xl bg-card border border-border/70 p-3.5 space-y-1 shadow-2xs">
+                        <div className="text-[10px] font-extrabold uppercase tracking-wider text-primary">
+                          D. Account History
+                        </div>
+                        <p className="text-muted-foreground leading-relaxed">
+                          {nbaPresentation.explanationSections.accountHistory}
+                        </p>
+                      </div>
                     </div>
-                    <span className="rounded-md bg-emerald-500/20 border border-emerald-500/30 px-2 py-0.5 text-[10px] font-extrabold uppercase tracking-wider text-emerald-800 dark:text-emerald-300 shrink-0">
-                      Approved
-                    </span>
-                  </div>
-                )}
+                  )}
+                </div>
 
-                {collectorStatus === "REJECTED" && (
-                  <div className="rounded-xl border border-rose-500/30 bg-rose-500/10 px-3.5 py-2 flex items-center justify-between gap-2">
-                    <div className="flex items-center gap-2">
-                      <X className="size-3.5 text-rose-600 dark:text-rose-400 shrink-0" />
-                      <span className="text-xs font-bold text-rose-900 dark:text-rose-200">
-                        Recommendation Declined — Reason: {rejectionReason}
-                      </span>
+                {/* 5. OTHER AVAILABLE ACTIONS (Collapsible Dropdown Section) */}
+                <div className="rounded-2xl border border-border/80 bg-card overflow-hidden shadow-2xs">
+                  <button
+                    type="button"
+                    onClick={() => setOtherActionsOpen((prev) => !prev)}
+                    className="w-full px-4 py-3 sm:py-3.5 flex items-center justify-between text-left hover:bg-muted/30 transition cursor-pointer"
+                  >
+                    <div className="flex items-center gap-2.5">
+                      <Sliders className="size-4 text-primary shrink-0" />
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <h4 className="text-xs sm:text-sm font-bold uppercase tracking-wider text-foreground">
+                            Other Available Actions
+                          </h4>
+                          <span className="hidden sm:inline-block text-[11px] text-muted-foreground">
+                            — Alternative options permitted for this account
+                          </span>
+                        </div>
+                        <p className="text-[10.5px] text-muted-foreground sm:hidden mt-0.5">
+                          Alternative options permitted for this account
+                        </p>
+                      </div>
                     </div>
-                    <span className="rounded-md bg-rose-500/20 border border-rose-500/30 px-2 py-0.5 text-[10px] font-extrabold uppercase tracking-wider text-rose-800 dark:text-rose-300 shrink-0">
-                      Declined
+                    <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-primary">
+                      <span>{otherActionsOpen ? "Hide options" : "Show options"}</span>
+                      {otherActionsOpen ? (
+                        <ChevronUp className="size-4" />
+                      ) : (
+                        <ChevronDown className="size-4" />
+                      )}
                     </span>
-                  </div>
-                )}
+                  </button>
 
-                {collectorStatus === "EDITED" && (
-                  <div className="rounded-xl border border-blue-500/30 bg-blue-500/10 px-3.5 py-2 flex items-center justify-between gap-2">
-                    <div className="flex items-center gap-2">
-                      <Sliders className="size-3.5 text-blue-600 dark:text-blue-400 shrink-0" />
-                      <span className="text-xs font-bold text-blue-900 dark:text-blue-200">
-                        Channel Overridden by Collector — {channelDisplayLabel} Active
-                      </span>
+                  {otherActionsOpen && (
+                    <div className="p-4 pt-3 border-t border-border/70 bg-muted/15 space-y-3">
+                      {nbaPresentation.otherAvailableActions.length > 0 ? (
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                          {nbaPresentation.otherAvailableActions.map((alt) => (
+                            <div
+                              key={alt.actionCode}
+                              className="rounded-xl border border-border/80 bg-card p-3.5 flex flex-col justify-between gap-3 shadow-2xs hover:border-primary/40 hover:shadow-sm transition"
+                            >
+                              <div className="space-y-2">
+                                <div className="flex items-start justify-between gap-2">
+                                  <span className="text-xs font-bold text-foreground">
+                                    {alt.title}
+                                  </span>
+                                  <span className="rounded-full bg-emerald-500/15 border border-emerald-500/30 px-2 py-0.5 text-[9.5px] font-bold text-emerald-700 dark:text-emerald-300 shrink-0">
+                                    Available
+                                  </span>
+                                </div>
+                                <p className="text-[11px] text-muted-foreground leading-relaxed">
+                                  {alt.description}
+                                </p>
+                                <p className="text-[11px] text-foreground/90 leading-relaxed">
+                                  <strong className="font-semibold text-foreground">
+                                    Why it fits:
+                                  </strong>{" "}
+                                  {alt.suitabilityNote}
+                                </p>
+                              </div>
+
+                              <div className="pt-2 flex items-center justify-between gap-2 border-t border-border/50">
+                                <span className="text-[10.5px] font-semibold text-muted-foreground">
+                                  Channel: {alt.channelLabel}
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setOverrideActionCode(alt.actionCode);
+                                    setOverrideChannel(alt.channelCode);
+                                    setCollectorStatus("EDITED");
+                                    toast.success(`Action switched to ${alt.title}`);
+                                  }}
+                                  className="rounded-lg border border-primary/30 bg-primary/10 hover:bg-primary hover:text-primary-foreground px-3 py-1 text-[11px] font-bold text-primary transition cursor-pointer shadow-2xs"
+                                >
+                                  Select Action
+                                </button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="rounded-xl border border-border/70 bg-card p-4 text-center text-xs text-muted-foreground">
+                          No other outreach actions are currently available for this account.
+                        </div>
+                      )}
                     </div>
-                    <span className="rounded-md bg-blue-500/20 border border-blue-500/30 px-2 py-0.5 text-[10px] font-extrabold uppercase tracking-wider text-blue-800 dark:text-blue-300 shrink-0">
-                      Overridden
-                    </span>
-                  </div>
-                )}
+                  )}
+                </div>
 
-                {/* 3. CUSTOMER RECOVERY SNAPSHOT (FOUR COMPACT BUSINESS KPI CARDS IN 2x2 GRID) */}
+                {/* CUSTOMER RECOVERY SNAPSHOT (Section 5 — FOUR CLEAN BUSINESS KPI CARDS) */}
                 <div className="space-y-3 pt-1">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
@@ -1471,18 +2554,18 @@ function CustomerDetailView() {
                         Customer Recovery Snapshot
                       </h4>
                     </div>
-                    <span className="text-[10px] font-semibold text-muted-foreground">
-                      Account Recovery Performance
+                    <span className="text-[10.5px] font-semibold text-muted-foreground">
+                      Account Summary
                     </span>
                   </div>
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    {/* Card 1 — Recovery Amount */}
+                    {/* Card 1 — Outstanding Amount */}
                     <div className="rounded-xl border border-border/80 bg-muted/25 p-3.5 flex flex-col justify-between">
                       <div>
-                        <div className="flex items-center justify-between">
+                        <div className="flex items-center justify-between gap-2">
                           <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
-                            Recovery Amount
+                            Outstanding Amount
                           </span>
                           <span
                             className={`rounded-md px-1.5 py-0.5 text-[9.5px] font-bold ${
@@ -1493,212 +2576,172 @@ function CustomerDetailView() {
                                   : "bg-muted text-muted-foreground border border-border"
                             }`}
                           >
-                            {c.repaymentType}
+                            {nbaPresentation.snapshot.outstanding.repaymentLabel}
                           </span>
                         </div>
-                        <div className="mt-1.5 text-xl font-black text-foreground tracking-tight">
-                          <AnimatedKpi value={recoveredAmount} prefix="$" />
+                        <div className="mt-1.5 flex items-baseline gap-2 flex-wrap">
+                          <span className="text-xl font-black text-foreground tracking-tight">
+                            <AnimatedKpi
+                              value={nbaPresentation.snapshot.outstanding.totalBalance}
+                              prefix="$"
+                            />
+                          </span>
+                          <span className="text-[10.5px] text-muted-foreground">total balance</span>
                         </div>
-                        <div className="mt-1 text-[11px] text-muted-foreground">
-                          of <b className="text-foreground">${c.exp.toLocaleString()}</b> balance ({c.cov}% coverage)
+                        <div className="mt-1 text-[11px] text-muted-foreground space-y-0.5">
+                          <div>
+                            Recovered:{" "}
+                            <b className="text-foreground">
+                              $
+                              {nbaPresentation.snapshot.outstanding.recoveredAmount.toLocaleString()}
+                            </b>{" "}
+                            · Remaining overdue:{" "}
+                            <b className="text-foreground">
+                              $
+                              {nbaPresentation.snapshot.outstanding.remainingOverdue.toLocaleString()}
+                            </b>
+                          </div>
+                          <div className="text-[10.5px]">
+                            {nbaPresentation.snapshot.outstanding.progressLabel} (overdue portion: $
+                            {nbaPresentation.snapshot.outstanding.pastDue.toLocaleString()})
+                          </div>
                         </div>
                       </div>
                       <div className="mt-2.5 h-1.5 w-full rounded-full bg-muted overflow-hidden">
                         <div
                           className={`h-full rounded-full transition-all duration-1000 ease-out ${
-                            c.cov >= 60 ? "bg-emerald-500" : c.cov >= 20 ? "bg-amber-500" : "bg-rose-500"
+                            c.cov >= 60
+                              ? "bg-emerald-500"
+                              : c.cov >= 20
+                                ? "bg-amber-500"
+                                : "bg-rose-500"
                           }`}
                           style={{ width: animateLiveBars ? `${Math.min(100, c.cov)}%` : "0%" }}
                         />
                       </div>
                     </div>
 
-                    {/* Card 2 — DPD Status */}
+                    {/* Card 2 — Payment Status */}
                     <div className="rounded-xl border border-border/80 bg-muted/25 p-3.5 flex flex-col justify-between">
                       <div>
-                        <div className="flex items-center justify-between">
+                        <div className="flex items-center justify-between gap-2">
                           <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
-                            DPD Status
+                            Payment Status
                           </span>
                           <span
                             className={`rounded-md px-1.5 py-0.5 text-[9.5px] font-bold ${
-                              c.dpd >= 90
+                              nbaPresentation.snapshot.paymentStatus.severity === "rose"
                                 ? "bg-rose-500/15 text-rose-600 dark:text-rose-400 border border-rose-500/30"
-                                : c.dpd >= 31
+                                : nbaPresentation.snapshot.paymentStatus.severity === "amber"
                                   ? "bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/30"
-                                  : c.dpd >= 1
+                                  : nbaPresentation.snapshot.paymentStatus.severity === "emerald"
                                     ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30"
                                     : "bg-sky-500/15 text-sky-600 dark:text-sky-400 border border-sky-500/30"
                             }`}
                           >
-                            {dpdStatusLabel}
+                            {nbaPresentation.snapshot.paymentStatus.categoryBadge}
                           </span>
                         </div>
                         <div className="mt-1.5 text-xl font-black text-foreground tracking-tight">
-                          {c.dpd === 0 ? "Current" : `${c.dpd} DPD`}
+                          {nbaPresentation.snapshot.paymentStatus.primaryText}
                         </div>
-                        <div className="mt-1 text-[11px] text-muted-foreground">
-                          {riskBucket} · <span className="font-semibold text-foreground">{dpdStageLabel}</span>
+                        <div className="mt-1 text-[11px] text-muted-foreground leading-relaxed">
+                          {nbaPresentation.snapshot.paymentStatus.supportingText}
                         </div>
                       </div>
                       <div className="mt-2.5 flex items-center gap-1.5 text-[10.5px] text-muted-foreground">
                         <span className="size-1.5 rounded-full bg-primary" />
-                        <span>Account Delinquency Status</span>
+                        <span>{nbaPresentation.snapshot.paymentStatus.statusFooter}</span>
                       </div>
                     </div>
 
-                    {/* Card 3 — Recovery Success Rate */}
+                    {/* Card 3 — Recent Payments */}
                     <div className="rounded-xl border border-border/80 bg-muted/25 p-3.5 flex flex-col justify-between">
                       <div>
-                        <div className="flex items-center justify-between">
+                        <div className="flex items-center justify-between gap-2">
                           <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
-                            Recovery Success Rate
+                            Recent Payments
                           </span>
-                          <span
-                            className={`rounded-md px-1.5 py-0.5 text-[9.5px] font-bold ${
-                              paymentSuccessRate >= 70
-                                ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30"
-                                : paymentSuccessRate >= 40
-                                  ? "bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/30"
-                                  : "bg-rose-500/15 text-rose-600 dark:text-rose-400 border border-rose-500/30"
-                            }`}
-                          >
-                            {c.pays > 0 ? "Commitment Kept" : "Pending Repayment"}
+                          <span className="rounded-md border border-border bg-muted px-1.5 py-0.5 text-[9.5px] font-bold text-muted-foreground">
+                            Last 30 days
                           </span>
                         </div>
-                        <div className="mt-1.5 text-xl font-black text-foreground tracking-tight">
-                          <AnimatedKpi value={paymentSuccessRate} suffix="%" />
+                        <div className="mt-1.5 flex items-baseline gap-2">
+                          <span className="text-xl font-black text-foreground tracking-tight">
+                            <AnimatedKpi value={nbaPresentation.snapshot.recentPayments.count30d} />
+                          </span>
+                          <span className="text-[11px] text-muted-foreground">
+                            successful payment
+                            {nbaPresentation.snapshot.recentPayments.count30d === 1 ? "" : "s"}
+                          </span>
                         </div>
-                        <div className="mt-1 text-[11px] text-muted-foreground">
-                          <b className="text-foreground">{c.pays}</b> of {Math.max(1, c.pays + (c.cov < 100 ? 1 : 0))} payments fulfilled
+                        <div className="mt-1 text-[11px] text-muted-foreground space-y-0.5">
+                          <div>{nbaPresentation.snapshot.recentPayments.supportingNote}</div>
+                          <div className="text-[10.5px] font-medium text-foreground/80">
+                            {nbaPresentation.snapshot.recentPayments.lastPaymentLabel}
+                          </div>
                         </div>
                       </div>
                       <div className="mt-2.5 h-1.5 w-full rounded-full bg-muted overflow-hidden">
                         <div
-                          className={`h-full rounded-full transition-all duration-1000 ease-out ${
-                            paymentSuccessRate >= 70
-                              ? "bg-emerald-500"
-                              : paymentSuccessRate >= 40
-                                ? "bg-amber-500"
-                                : "bg-rose-500"
-                          }`}
-                          style={{ width: animateLiveBars ? `${Math.min(100, paymentSuccessRate)}%` : "0%" }}
+                          className="h-full rounded-full bg-primary transition-all duration-1000 ease-out"
+                          style={{
+                            width: animateLiveBars ? `${Math.min(100, c.pays * 25)}%` : "0%",
+                          }}
                         />
                       </div>
                     </div>
 
-                    {/* Card 4 — DPD Trend */}
+                    {/* Card 4 — Account Progress */}
                     <div className="rounded-xl border border-border/80 bg-muted/25 p-3.5 flex flex-col justify-between">
                       <div>
-                        <div className="flex items-center justify-between">
+                        <div className="flex items-center justify-between gap-2">
                           <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
-                            DPD Trend
+                            Account Progress
                           </span>
                           <span
                             className={`rounded-md px-1.5 py-0.5 text-[9.5px] font-bold flex items-center gap-1 ${
-                              !hasHistoricalDpd
+                              nbaPresentation.snapshot.accountProgress.tone === "neutral"
                                 ? "bg-muted text-muted-foreground border border-border"
-                                : delta30Dpd < 0
+                                : nbaPresentation.snapshot.accountProgress.tone === "emerald"
                                   ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30"
-                                  : delta30Dpd > 0
+                                  : nbaPresentation.snapshot.accountProgress.tone === "rose"
                                     ? "bg-rose-500/15 text-rose-600 dark:text-rose-400 border border-rose-500/30"
                                     : "bg-sky-500/15 text-sky-600 dark:text-sky-400 border border-sky-500/30"
                             }`}
                           >
-                            {hasHistoricalDpd && delta30Dpd < 0 ? (
+                            {nbaPresentation.snapshot.accountProgress.tone === "emerald" ? (
                               <TrendingDown className="size-2.5" />
-                            ) : hasHistoricalDpd && delta30Dpd > 0 ? (
+                            ) : nbaPresentation.snapshot.accountProgress.tone === "rose" ? (
                               <TrendingUp className="size-2.5" />
                             ) : (
                               <Activity className="size-2.5" />
                             )}
-                            {trendBadgeLabel}
+                            {nbaPresentation.snapshot.accountProgress.badge}
                           </span>
                         </div>
-                        <div className="mt-1.5 flex items-baseline gap-2">
-                          <span
-                            className={`text-xl font-black tracking-tight ${
-                              !hasHistoricalDpd
-                                ? "text-muted-foreground"
-                                : delta30Dpd < 0
-                                  ? "text-emerald-600 dark:text-emerald-400"
-                                  : delta30Dpd > 0
-                                    ? "text-rose-600 dark:text-rose-400"
-                                    : "text-foreground"
-                            }`}
-                          >
-                            {trendDisplayValue}
-                          </span>
-                          {hasHistoricalDpd && (
-                            <span className="text-[10.5px] font-medium text-muted-foreground">
-                              {delta30Dpd < 0 ? "(Improving)" : delta30Dpd > 0 ? "(Worsening)" : "(Unchanged)"}
-                            </span>
-                          )}
+                        <div
+                          className={`mt-1.5 text-xl font-black tracking-tight ${
+                            nbaPresentation.snapshot.accountProgress.tone === "neutral"
+                              ? "text-muted-foreground"
+                              : nbaPresentation.snapshot.accountProgress.tone === "emerald"
+                                ? "text-emerald-600 dark:text-emerald-400"
+                                : nbaPresentation.snapshot.accountProgress.tone === "rose"
+                                  ? "text-rose-600 dark:text-rose-400"
+                                  : "text-foreground"
+                          }`}
+                        >
+                          {nbaPresentation.snapshot.accountProgress.primaryText}
                         </div>
-                        <div className="mt-1 text-[11px] text-muted-foreground">
-                          {trendSubtext}
+                        <div className="mt-1 text-[11px] text-muted-foreground leading-relaxed">
+                          {nbaPresentation.snapshot.accountProgress.comparisonText}
                         </div>
                       </div>
                       <div className="mt-2.5 flex items-center gap-1.5 text-[10.5px] text-muted-foreground">
                         <Clock className="size-3 text-muted-foreground/80" />
-                        <span>30-Day Historical Comparison Period</span>
+                        <span>Compared with 30 days ago</span>
                       </div>
                     </div>
-                  </div>
-                </div>
-
-                {/* 4. ACTION TAKEN (YES / NO) SEGMENT */}
-                <div className="rounded-xl border border-border/80 bg-muted/20 px-4 py-3 flex items-center justify-between gap-3 flex-wrap">
-                  <div className="flex items-center gap-2.5">
-                    <div className="size-8 rounded-xl bg-primary/10 border border-primary/20 flex items-center justify-center text-primary shrink-0 shadow-xs">
-                      <ClipboardCheck className="size-4" />
-                    </div>
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs font-bold text-foreground">Action Taken?</span>
-                        {storedFeedback && (
-                          <span className="rounded-md bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30 px-2 py-0.5 text-[9.5px] font-bold">
-                            ✓ {storedFeedback.channelName}: {storedFeedback.amountPaid > 0 ? `$${storedFeedback.amountPaid.toLocaleString()} Collected` : storedFeedback.presenceOrDisposition}
-                          </span>
-                        )}
-                      </div>
-                      <p className="text-[11px] text-muted-foreground mt-0.5">
-                        {storedFeedback
-                          ? "Feedback recorded & timeline updated · Click Yes to view/edit in sidebar"
-                          : "Select Yes to open outcome feedback sidebar, or No to defer"}
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-1.5 p-1 rounded-xl bg-card border border-border/80 shadow-xs shrink-0">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setActionTaken("YES");
-                        setDrawerOpen(true);
-                      }}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
-                        actionTaken === "YES"
-                          ? "bg-emerald-600 text-white shadow-xs"
-                          : "text-foreground hover:bg-muted"
-                      }`}
-                    >
-                      <Check className="size-3" /> Yes
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setActionTaken("NO");
-                        setNoActionModalOpen(true);
-                      }}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
-                        actionTaken === "NO"
-                          ? "bg-rose-600 text-white shadow-xs"
-                          : "text-foreground hover:bg-muted"
-                      }`}
-                    >
-                      <X className="size-3" /> No
-                    </button>
                   </div>
                 </div>
               </div>
@@ -1707,7 +2750,7 @@ function CustomerDetailView() {
         </div>
       </div>
 
-      {/* OUTCOME & RECOVERY FEEDBACK POPUP MODAL (HORIZONTAL SINGLE-SCREEN EXECUTIVE LAYOUT) */}
+      {/* OUTCOME & RECOVERY FEEDBACK POPUP MODAL */}
       {drawerOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4">
           <button
@@ -1721,10 +2764,10 @@ function CustomerDetailView() {
             <div className="flex items-center justify-between border-b border-border/70 pb-2.5">
               <div className="space-y-0.5">
                 <span className="text-[10px] font-bold uppercase tracking-wider text-primary">
-                  Frontline Outreach Execution
+                  Follow-up Outcome Capture
                 </span>
                 <h3 className="text-base font-bold text-foreground">
-                  Record Outreach Outcome &amp; Response
+                  Record What Happened After Contact
                 </h3>
               </div>
               <button
@@ -1737,26 +2780,28 @@ function CustomerDetailView() {
             </div>
 
             {/* Account Quick Summary Banner */}
-            <div className="rounded-xl border border-border/70 bg-muted/30 p-2.5 sm:p-3 text-xs flex justify-between items-center gap-2">
+            <div className="rounded-xl border border-border/70 bg-muted/30 p-2.5 sm:p-3 text-xs flex justify-between items-center gap-2 flex-wrap">
               <div>
                 <span className="font-bold text-foreground">{c.name}</span> ({c.acct})
                 <div className="text-[11px] text-muted-foreground mt-0.5">
-                  Due: ${c.exp.toLocaleString()} · {c.dpd} DPD ({riskBucket})
+                  Overdue: ${pastDueAmt.toLocaleString()} · Remaining balance: $
+                  {remainingBal.toLocaleString()} ·{" "}
+                  {c.dpd === 0 ? "Up to date" : `${c.dpd} days overdue`}
                 </div>
               </div>
-              <span className="rounded-md bg-primary/10 border border-primary/20 px-2 py-0.5 text-[10px] font-bold text-primary shrink-0">
-                Current NBA: {channelDisplayLabel}
+              <span className="rounded-md bg-primary/10 border border-primary/20 px-2.5 py-0.5 text-[10.5px] font-bold text-primary shrink-0">
+                Planned Action: {nbaPresentation.hero.title}
               </span>
             </div>
 
-            {/* Horizontal Two-Column Body for Single-Screen Alignment */}
+            {/* Horizontal Two-Column Body */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5 items-start">
-              {/* LEFT COLUMN: Communication Channels & Direct Disposition/Response */}
+              {/* LEFT COLUMN: Contact Channel + Quick Outcome Selector */}
               <div className="space-y-3">
                 {/* Step 1: Communication Channel Cards */}
                 <div className="space-y-2">
                   <label className="block text-[11px] font-semibold text-muted-foreground">
-                    Select Communication Channel (Only Supported Recovery Channels)
+                    1. Which channel was used to contact the customer?
                   </label>
 
                   <div className="space-y-2">
@@ -1765,38 +2810,56 @@ function CustomerDetailView() {
                         code: "PHONE" as const,
                         label: "Phone Call",
                         icon: Phone,
-                        successRate: 55,
-                        responseRate: 32,
-                        isPrescribed:
-                          primaryRecommendation.name.toLowerCase().includes("call") ||
-                          primaryRecommendation.name.toLowerCase().includes("phone"),
+                        csr: phoneStats?.csr ?? null,
+                        rr: phoneStats?.responseRate ?? null,
+                        legacyPermitted: phoneStats
+                          ? phoneStats.isEligible
+                          : hasConsent && !isDnc && !isClosedAccount,
                       },
                       {
                         code: "MAIL" as const,
                         label: "Email",
                         icon: Mail,
-                        successRate: 42,
-                        responseRate: 22,
-                        isPrescribed:
-                          primaryRecommendation.name.toLowerCase().includes("mail") ||
-                          primaryRecommendation.name.toLowerCase().includes("email"),
+                        csr: emailStats?.csr ?? null,
+                        rr: emailStats?.responseRate ?? null,
+                        legacyPermitted: emailStats
+                          ? emailStats.isEligible
+                          : hasConsent && !isDnc && !isClosedAccount,
                       },
                       {
                         code: "FIELD" as const,
                         label: "Field Visit",
                         icon: MapPin,
-                        successRate: 88,
-                        responseRate: 34,
-                        isPrescribed:
-                          primaryRecommendation.name.toLowerCase().includes("field") ||
-                          primaryRecommendation.name.toLowerCase().includes("visit"),
+                        csr: fieldStats?.csr ?? null,
+                        rr: fieldStats?.responseRate ?? null,
+                        legacyPermitted: fieldStats
+                          ? fieldStats.isEligible
+                          : hasConsent &&
+                            !isDnc &&
+                            !isClosedAccount &&
+                            c.dpd >= 1 &&
+                            pastDueAmt >= 500,
                       },
                     ].map((ch) => {
                       const isSelected = feedbackChannel === ch.code;
+                      const mappedArm = resolveArmForFeedbackChannel(ch.code, activeNba);
+                      const isPrescribed = activeNba
+                        ? !isHoldSuppressed && mappedArm === effectiveActionCode
+                        : ch.code === "PHONE"
+                          ? primaryRecommendation.code === "PHONE"
+                          : ch.code === "MAIL"
+                            ? primaryRecommendation.code === "EMAIL"
+                            : primaryRecommendation.code === "FIELD";
+                      const isChannelEligible = activeNba
+                        ? !isHoldSuppressed && activeNba.eligibleArms.includes(mappedArm)
+                        : ch.legacyPermitted;
                       return (
                         <div
                           key={ch.code}
-                          onClick={() => setFeedbackChannel(ch.code)}
+                          onClick={() => {
+                            setFeedbackChannel(ch.code);
+                            setSelectedOutcomePresetId("");
+                          }}
                           className={`rounded-xl border p-2.5 sm:p-3 cursor-pointer transition flex items-center justify-between gap-2.5 ${
                             isSelected
                               ? "border-primary bg-primary/10 shadow-xs"
@@ -1814,24 +2877,30 @@ function CustomerDetailView() {
                               <ch.icon className="size-4" />
                             </div>
                             <div>
-                              <div className="font-bold text-foreground text-xs flex items-center gap-1.5">
+                              <div className="font-bold text-foreground text-xs flex items-center gap-1.5 flex-wrap">
                                 {ch.label}
-                                {ch.isPrescribed && (
+                                {isPrescribed && (
                                   <span className="rounded-md bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 px-1.5 py-0.2 text-[9px] font-bold">
-                                    Model Prescribed
+                                    Recommended
                                   </span>
                                 )}
                               </div>
                               <div className="text-[11px] text-muted-foreground mt-0.5">
-                                Success: <strong>{ch.successRate}%</strong> · Response:{" "}
-                                <strong>{ch.responseRate}%</strong>
+                                {getBusinessActionMeta(mappedArm).cardTitle}
+                                {ch.csr != null ? ` · ${Math.round(ch.csr)}% past answer rate` : ""}
                               </div>
                             </div>
                           </div>
 
                           <div className="text-right shrink-0">
-                            <span className="rounded-full px-2 py-0.5 text-[10px] font-semibold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
-                              Permitted
+                            <span
+                              className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                                isChannelEligible
+                                  ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+                                  : "bg-rose-500/15 text-rose-700 dark:text-rose-300"
+                              }`}
+                            >
+                              {isChannelEligible ? "Available" : "Restricted"}
                             </span>
                           </div>
                         </div>
@@ -1840,23 +2909,50 @@ function CustomerDetailView() {
                   </div>
                 </div>
 
-                {/* Step 2: Channel-Specific Response & Demeanor Selectors (Interactive Accordion) */}
+                {/* Step 2: Quick Action-Specific Outcome Presets (Section 8) */}
+                <div className="space-y-2">
+                  <label className="block text-[11px] font-semibold text-muted-foreground">
+                    2. What was the outcome?
+                  </label>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+                    {getActionSpecificOutcomes(feedbackChannel).map((preset) => {
+                      const active = selectedOutcomePresetId === preset.id;
+                      return (
+                        <button
+                          key={preset.id}
+                          type="button"
+                          onClick={() => applyOutcomePreset(preset)}
+                          className={`rounded-lg border p-2 text-left transition cursor-pointer ${
+                            active
+                              ? "border-primary bg-primary/10 ring-1 ring-primary shadow-xs"
+                              : "border-border/70 bg-muted/20 hover:bg-muted/40"
+                          }`}
+                        >
+                          <div className="font-bold text-[11.5px] text-foreground">
+                            {preset.label}
+                          </div>
+                          <div className="text-[10px] text-muted-foreground mt-0.5 leading-snug">
+                            {preset.subtitle}
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Optional Detailed Selectors */}
                 <div className="rounded-xl border border-border/80 bg-muted/20 p-3 space-y-2.5">
                   <button
                     type="button"
                     onClick={() => setResponseSectionOpen((prev) => !prev)}
-                    className="w-full flex items-center justify-between border-b border-border/60 pb-2 cursor-pointer text-left"
+                    className="w-full flex items-center justify-between cursor-pointer text-left"
                   >
                     <span className="text-[10.5px] font-bold uppercase tracking-wider text-primary flex items-center gap-1.5">
                       <Activity className="size-3" />
-                      {feedbackChannel === "FIELD"
-                        ? "Field Visit Interaction & Response"
-                        : feedbackChannel === "PHONE"
-                          ? "Phone Call Disposition & Response"
-                          : "Mail & Notice Outreach Response"}
+                      <span>More interaction details (optional)</span>
                     </span>
                     <span className="flex items-center gap-1 text-[10px] text-muted-foreground font-semibold hover:text-foreground">
-                      <span>Parameters</span>
+                      <span>{responseSectionOpen ? "Hide" : "Customize"}</span>
                       {responseSectionOpen ? (
                         <ChevronUp className="size-3.5 text-muted-foreground" />
                       ) : (
@@ -1866,13 +2962,13 @@ function CustomerDetailView() {
                   </button>
 
                   {responseSectionOpen && (
-                    <div className="space-y-2 pt-0.5">
+                    <div className="space-y-2 pt-2 border-t border-border/60">
                       {/* FIELD VISIT FIELDS */}
                       {feedbackChannel === "FIELD" && (
                         <div className="space-y-2">
                           <div className="space-y-1">
                             <label className="text-[10.5px] font-bold uppercase tracking-wider text-muted-foreground">
-                              Customer Presence at Premises
+                              Customer Availability at Visit
                             </label>
                             <select
                               value={fieldPresence}
@@ -1880,42 +2976,62 @@ function CustomerDetailView() {
                               className="w-full rounded-lg border border-border bg-card p-2 text-xs font-semibold text-foreground focus:outline-hidden focus:border-primary cursor-pointer"
                             >
                               <option value="Customer Met in Person">Customer Met in Person</option>
-                              <option value="Premises Locked / Not Available">Premises Locked / Vacant</option>
-                              <option value="Met Family / Third-Party">Met Family / Third-Party</option>
-                              <option value="Address Shifted / Untraceable">Address Shifted / Untraceable</option>
+                              <option value="Premises Locked / Not Available">
+                                Premises Locked / Not Available
+                              </option>
+                              <option value="Met Family / Third-Party">Met Family Member</option>
+                              <option value="Address Shifted / Untraceable">
+                                Address Changed / Unable to Locate
+                              </option>
                             </select>
                           </div>
 
                           <div className="space-y-1">
                             <label className="text-[10.5px] font-bold uppercase tracking-wider text-muted-foreground">
-                              Customer Demeanor &amp; Reaction
+                              Customer Response
                             </label>
                             <select
                               value={fieldReaction}
                               onChange={(e) => setFieldReaction(e.target.value)}
                               className="w-full rounded-lg border border-border bg-card p-2 text-xs font-semibold text-foreground focus:outline-hidden focus:border-primary cursor-pointer"
                             >
-                              <option value="Cooperative & Willing to Settle">Cooperative &amp; Willing to Settle</option>
-                              <option value="Claimed Financial Hardship / Job Loss">Claimed Hardship / Job Loss</option>
-                              <option value="Evasive / Asking for Time">Evasive / Asking for Time</option>
-                              <option value="Disputed Balance / Hidden Charges">Disputed Balance / Hidden Charges</option>
-                              <option value="Hostile / Refused Discussion">Hostile / Refused Entry</option>
+                              <option value="Cooperative & Willing to Settle">
+                                Cooperative &amp; Willing to Pay
+                              </option>
+                              <option value="Claimed Financial Hardship / Job Loss">
+                                Reported Financial Hardship
+                              </option>
+                              <option value="Evasive / Asking for Time">Asked for More Time</option>
+                              <option value="Disputed Balance / Hidden Charges">
+                                Disputed Balance / Charges
+                              </option>
+                              <option value="Hostile / Refused Discussion">
+                                Refused Discussion
+                              </option>
                             </select>
                           </div>
 
                           <div className="space-y-1">
                             <label className="text-[10.5px] font-bold uppercase tracking-wider text-muted-foreground">
-                              Commitment Made during Visit
+                              Next Step Agreed
                             </label>
                             <select
                               value={fieldCommitment}
                               onChange={(e) => setFieldCommitment(e.target.value)}
                               className="w-full rounded-lg border border-border bg-card p-2 text-xs font-semibold text-foreground focus:outline-hidden focus:border-primary cursor-pointer"
                             >
-                              <option value="Immediate Partial Payment Today">Immediate Partial Payment Today</option>
-                              <option value="Promise to Pay (PTP) Agreed">Promise to Pay (PTP) Full Balance</option>
-                              <option value="Loan Restructuring Requested">Loan Restructuring / EMI Relief</option>
-                              <option value="Refused to Commit / Awaiting Notice">Refused to Commit</option>
+                              <option value="Immediate Partial Payment Today">
+                                Partial Payment Made Today
+                              </option>
+                              <option value="Promise to Pay (PTP) Agreed">
+                                Promised Full Payment on Later Date
+                              </option>
+                              <option value="Loan Restructuring Requested">
+                                Requested Payment Plan Adjustment
+                              </option>
+                              <option value="Refused to Commit / Awaiting Notice">
+                                Declined to Commit
+                              </option>
                             </select>
                           </div>
                         </div>
@@ -1926,105 +3042,155 @@ function CustomerDetailView() {
                         <div className="space-y-2">
                           <div className="space-y-1">
                             <label className="text-[10.5px] font-bold uppercase tracking-wider text-muted-foreground">
-                              Did Customer Pick up Call?
+                              Call Result
                             </label>
                             <select
                               value={phoneDisposition}
                               onChange={(e) => setPhoneDisposition(e.target.value)}
                               className="w-full rounded-lg border border-border bg-card p-2 text-xs font-semibold text-foreground focus:outline-hidden focus:border-primary cursor-pointer"
                             >
-                              <option value="Connected — Spoke with Customer">Connected — Spoke with Customer</option>
-                              <option value="Answered by Family / Spouse">Answered by Family / Spouse</option>
-                              <option value="Ringing / No Answer">Ringing / No Answer</option>
-                              <option value="Left Voicemail / IVR Dispatched">Left Voicemail / IVR</option>
-                              <option value="Busy / Number Disconnected">Busy / Number Disconnected</option>
+                              <option value="Connected — Spoke with Customer">
+                                Connected — Spoke with Customer
+                              </option>
+                              <option value="Answered by Family / Spouse">
+                                Answered by Family Member
+                              </option>
+                              <option value="Ringing / No Answer">No Answer</option>
+                              <option value="Left Voicemail / IVR Dispatched">
+                                Left Voicemail
+                              </option>
+                              <option value="Busy / Number Disconnected">
+                                Line Busy / Disconnected
+                              </option>
                             </select>
                           </div>
 
                           <div className="space-y-1">
                             <label className="text-[10.5px] font-bold uppercase tracking-wider text-muted-foreground">
-                              Customer Tone &amp; Reaction
+                              Customer Response
                             </label>
                             <select
                               value={phoneReaction}
                               onChange={(e) => setPhoneReaction(e.target.value)}
                               className="w-full rounded-lg border border-border bg-card p-2 text-xs font-semibold text-foreground focus:outline-hidden focus:border-primary cursor-pointer"
                             >
-                              <option value="Calm & Acknowledged Liability">Calm &amp; Acknowledged Liability</option>
-                              <option value="Distressed / Cash Flow Problem">Distressed / Cash Flow Issue</option>
-                              <option value="Promised Payment via Portal">Promised Payment via Self-Serve</option>
-                              <option value="Disputed Interest / Penalties">Disputed Interest / Penalties</option>
-                              <option value="Aggressive / Disconnected Call">Aggressive / Disconnected Call</option>
+                              <option value="Calm & Acknowledged Liability">
+                                Acknowledged Overdue Balance
+                              </option>
+                              <option value="Distressed / Cash Flow Problem">
+                                Mentioned Cash Flow Difficulty
+                              </option>
+                              <option value="Promised Payment via Portal">
+                                Promised to Pay Online
+                              </option>
+                              <option value="Disputed Interest / Penalties">
+                                Questioned Charges or Interest
+                              </option>
+                              <option value="Aggressive / Disconnected Call">
+                                Ended Call / Refused
+                              </option>
                             </select>
                           </div>
 
                           <div className="space-y-1">
                             <label className="text-[10.5px] font-bold uppercase tracking-wider text-muted-foreground">
-                              Agreed Next Proceedings
+                              Agreed Next Step
                             </label>
                             <select
                               value={phoneNextStep}
                               onChange={(e) => setPhoneNextStep(e.target.value)}
                               className="w-full rounded-lg border border-border bg-card p-2 text-xs font-semibold text-foreground focus:outline-hidden focus:border-primary cursor-pointer"
                             >
-                              <option value="PTP Registered on Call">PTP Registered on Call</option>
-                              <option value="Payment Link Dispatched via SMS">Instant Payment Link SMS Dispatched</option>
-                              <option value="Follow-up Call Scheduled (Within 48h)">Follow-up Call Scheduled (48h)</option>
-                              <option value="Escalate to In-Person Field Visit">Escalate to In-Person Field Visit</option>
-                              <option value="Issue Statutory Legal Notice">Issue Statutory Demand Notice</option>
+                              <option value="PTP Registered on Call">Payment Date Promised</option>
+                              <option value="Payment Link Dispatched via SMS">
+                                Sent Payment Link by SMS
+                              </option>
+                              <option value="Follow-up Call Scheduled (Within 48h)">
+                                Follow-up Call Scheduled
+                              </option>
+                              <option value="Escalate to In-Person Field Visit">
+                                Refer for Field Visit
+                              </option>
+                              <option value="Issue Statutory Legal Notice">
+                                Send Formal Overdue Notice
+                              </option>
                             </select>
                           </div>
                         </div>
                       )}
 
-                      {/* MAILS & DIGITAL FIELDS */}
+                      {/* EMAIL / DIGITAL FIELDS */}
                       {feedbackChannel === "MAIL" && (
                         <div className="space-y-2">
                           <div className="space-y-1">
                             <label className="text-[10.5px] font-bold uppercase tracking-wider text-muted-foreground">
-                              Mail &amp; Notice Response
+                              Message Status
                             </label>
                             <select
                               value={mailStatus}
                               onChange={(e) => setMailStatus(e.target.value)}
                               className="w-full rounded-lg border border-border bg-card p-2 text-xs font-semibold text-foreground focus:outline-hidden focus:border-primary cursor-pointer"
                             >
-                              <option value="Delivered & Link Clicked / Viewed">Delivered &amp; Link Clicked / Viewed</option>
-                              <option value="Delivered — Awaiting Customer Open">Delivered — Awaiting Open</option>
-                              <option value="Customer Replied via Email / Portal">Customer Replied via Email / Portal</option>
-                              <option value="Returned Unclaimed / Mail Bounce">Returned Unclaimed / Mail Bounce</option>
+                              <option value="Delivered & Link Clicked / Viewed">
+                                Delivered &amp; Payment Link Clicked
+                              </option>
+                              <option value="Delivered — Awaiting Customer Open">
+                                Delivered — Awaiting Response
+                              </option>
+                              <option value="Customer Replied via Email / Portal">
+                                Customer Replied
+                              </option>
+                              <option value="Returned Unclaimed / Mail Bounce">
+                                Email Bounced / Undelivered
+                              </option>
                             </select>
                           </div>
 
                           <div className="space-y-1">
                             <label className="text-[10.5px] font-bold uppercase tracking-wider text-muted-foreground">
-                              Customer Reaction / Action
+                              Customer Action
                             </label>
                             <select
                               value={mailReaction}
                               onChange={(e) => setMailReaction(e.target.value)}
                               className="w-full rounded-lg border border-border bg-card p-2 text-xs font-semibold text-foreground focus:outline-hidden focus:border-primary cursor-pointer"
                             >
-                              <option value="Online Self-Service Pay Initiated">Online Self-Service Pay Initiated</option>
-                              <option value="Statement of Account Requested">Statement of Account Requested</option>
-                              <option value="Grievance / Hardship Letter Submitted">Grievance / Hardship Letter Submitted</option>
-                              <option value="No Action Taken / Passive Disregard">No Action Taken / Passive</option>
+                              <option value="Online Self-Service Pay Initiated">
+                                Started Online Payment
+                              </option>
+                              <option value="Statement of Account Requested">
+                                Requested Account Statement
+                              </option>
+                              <option value="Grievance / Hardship Letter Submitted">
+                                Submitted Hardship Request
+                              </option>
+                              <option value="No Action Taken / Passive Disregard">
+                                No Response Yet
+                              </option>
                             </select>
                           </div>
 
                           <div className="space-y-1">
                             <label className="text-[10.5px] font-bold uppercase tracking-wider text-muted-foreground">
-                              Further Operational Proceedings
+                              Next Follow-up Step
                             </label>
                             <select
                               value={mailNextStep}
                               onChange={(e) => setMailNextStep(e.target.value)}
                               className="w-full rounded-lg border border-border bg-card p-2 text-xs font-semibold text-foreground focus:outline-hidden focus:border-primary cursor-pointer"
                             >
-                              <option value="Send Urgent Automated Reminder SMS">Send Urgent Automated Reminder SMS</option>
-                              <option value="Escalate to Outbound Collection Call">Escalate to Outbound Collection Call</option>
-                              <option value="Issue Final Statutory Demand Notice">Issue Final Statutory Demand Notice</option>
-                              <option value="Refer to Skip-Tracing Agency">Refer to Skip-Tracing Bureau</option>
+                              <option value="Send Urgent Automated Reminder SMS">
+                                Send Follow-up SMS Reminder
+                              </option>
+                              <option value="Escalate to Outbound Collection Call">
+                                Follow Up by Phone Call
+                              </option>
+                              <option value="Issue Final Statutory Demand Notice">
+                                Send Formal Notice
+                              </option>
+                              <option value="Refer to Skip-Tracing Agency">
+                                Verify Customer Contact Details
+                              </option>
                             </select>
                           </div>
                         </div>
@@ -2034,25 +3200,27 @@ function CustomerDetailView() {
                 </div>
               </div>
 
-              {/* RIGHT COLUMN: Repayment Reconciliation, PTP Commitment & Notes */}
+              {/* RIGHT COLUMN: Payment Details, Payment Promise & Notes */}
               <div className="space-y-3">
-                {/* Step 3: Repayment Reconciliation & DPD Metrics */}
+                {/* Step 3: Payment Details */}
                 <div className="space-y-2">
                   <label className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground flex items-center justify-between">
-                    <span>2. Repayment Reconciliation &amp; DPD Impact</span>
-                    <span className="text-muted-foreground">Live calculated balance</span>
+                    <span>3. Payment Details</span>
+                    <span className="text-muted-foreground">Updates remaining overdue amount</span>
                   </label>
 
                   <div className="grid grid-cols-2 gap-2">
-                    {/* Total Balance */}
+                    {/* Overdue Amount */}
                     <div className="rounded-xl border border-border/80 bg-muted/20 p-2.5">
                       <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground block">
-                        Total Overdue Exposure
+                        Overdue Amount
                       </span>
                       <div className="text-base font-black text-foreground mt-0.5">
-                        ${c.exp.toLocaleString()}
+                        ${pastDueAmt.toLocaleString()}
                       </div>
-                      <span className="text-[10px] text-muted-foreground">Total Account Liability</span>
+                      <span className="text-[10px] text-muted-foreground">
+                        Total Balance: ${remainingBal.toLocaleString()}
+                      </span>
                     </div>
 
                     {/* Amount Paid Today */}
@@ -2066,14 +3234,16 @@ function CustomerDetailView() {
                           <input
                             type="number"
                             min={0}
-                            max={c.exp}
+                            max={outcomeDueBase}
                             value={amountPaidInput === 0 ? "" : amountPaidInput}
                             placeholder="0"
-                            onChange={(e) => setAmountPaidInput(Math.max(0, Number(e.target.value) || 0))}
+                            onChange={(e) =>
+                              setAmountPaidInput(Math.max(0, Number(e.target.value) || 0))
+                            }
                             className="w-full rounded-lg border border-border bg-muted/40 pl-7 pr-2.5 py-1 text-sm font-black text-foreground focus:outline-hidden focus:border-primary"
                           />
                         </div>
-                        {/* Presets */}
+                        {/* Quick Payment Buttons */}
                         <div className="flex items-center gap-1 flex-wrap">
                           {[0, 500, 1000].map((preset) => (
                             <button
@@ -2087,62 +3257,66 @@ function CustomerDetailView() {
                           ))}
                           <button
                             type="button"
-                            onClick={() => setAmountPaidInput(c.exp)}
+                            onClick={() => setAmountPaidInput(outcomeDueBase)}
                             className="rounded-sm bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30 px-1.5 py-0.5 text-[9px] font-bold cursor-pointer"
                           >
-                            Full Cure
+                            Pay Full (${outcomeDueBase.toLocaleString()})
                           </button>
                         </div>
                       </div>
                     </div>
 
-                    {/* Remaining Balance */}
+                    {/* Remaining Overdue After Payment */}
                     <div className="rounded-xl border border-border/80 bg-muted/20 p-2.5">
                       <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground block">
-                        Remaining Balance Left
+                        Remaining Overdue
                       </span>
                       <div
                         className={`text-base font-black mt-0.5 ${
-                          c.exp - amountPaidInput <= 0
+                          outcomeDueBase - amountPaidInput <= 0
                             ? "text-emerald-600 dark:text-emerald-400"
                             : "text-foreground"
                         }`}
                       >
-                        ${Math.max(0, c.exp - amountPaidInput).toLocaleString()}
+                        ${Math.max(0, outcomeDueBase - amountPaidInput).toLocaleString()}
                       </div>
                       <span className="text-[10px] text-muted-foreground">
-                        {amountPaidInput > 0
-                          ? `${Math.round((amountPaidInput / c.exp) * 100)}% Cleared`
-                          : "Pending Collection"}
+                        {amountPaidInput > 0 && outcomeDueBase > 0
+                          ? `${Math.min(100, Math.round((amountPaidInput / outcomeDueBase) * 100))}% Paid`
+                          : "Awaiting Payment"}
                       </span>
                     </div>
 
-                    {/* DPD Status Impact */}
+                    {/* Account Status After Payment */}
                     <div className="rounded-xl border border-border/80 bg-muted/20 p-2.5">
                       <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground block">
-                        Account DPD Impact
+                        Status After Payment
                       </span>
                       <div
                         className={`text-base font-black mt-0.5 ${
-                          amountPaidInput >= c.exp
+                          c.dpd === 0 || (outcomeDueBase > 0 && amountPaidInput >= outcomeDueBase)
                             ? "text-emerald-600 dark:text-emerald-400"
                             : "text-amber-600 dark:text-amber-400"
                         }`}
                       >
-                        {amountPaidInput >= c.exp ? "0 DPD (Cured)" : `${c.dpd} DPD`}
+                        {c.dpd === 0
+                          ? "Up to date"
+                          : outcomeDueBase > 0 && amountPaidInput >= outcomeDueBase
+                            ? "Paid in Full"
+                            : `${c.dpd} Days Overdue`}
                       </div>
                       <span className="text-[10px] text-muted-foreground">
-                        {amountPaidInput >= c.exp
-                          ? "Fully Resolved ✓"
+                        {c.dpd === 0 || (outcomeDueBase > 0 && amountPaidInput >= outcomeDueBase)
+                          ? "Overdue balance cleared"
                           : amountPaidInput > 0
-                            ? "Partially Serviced"
-                            : riskBucket}
+                            ? "Partial payment applied"
+                            : nbaPresentation.snapshot.paymentStatus.categoryBadge}
                       </span>
                     </div>
                   </div>
                 </div>
 
-                {/* Step 4: Promise-to-Pay (PTP) Commitment (Collapsible with arrow) */}
+                {/* Step 4: Payment Promise */}
                 <div className="rounded-xl border border-border/80 bg-card p-3 space-y-2">
                   <div className="flex items-center justify-between">
                     <button
@@ -2152,7 +3326,7 @@ function CustomerDetailView() {
                     >
                       <Calendar className="size-3.5 text-primary" />
                       <span className="text-xs font-bold text-foreground group-hover:text-primary transition">
-                        Promise-to-Pay (PTP) Commitment
+                        Payment Promise (if agreed)
                       </span>
                       {ptpAgreed ? (
                         <ChevronUp className="size-3.5 text-muted-foreground" />
@@ -2161,7 +3335,9 @@ function CustomerDetailView() {
                       )}
                     </button>
                     <label className="flex items-center gap-1.5 text-xs font-bold cursor-pointer">
-                      <span className="text-muted-foreground text-[11px]">PTP Agreed?</span>
+                      <span className="text-muted-foreground text-[11px]">
+                        Customer promised to pay?
+                      </span>
                       <input
                         type="checkbox"
                         checked={ptpAgreed}
@@ -2175,7 +3351,7 @@ function CustomerDetailView() {
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-2 border-t border-border/60">
                       <div className="space-y-1">
                         <label className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
-                          PTP Amount ($)
+                          Promised Amount ($)
                         </label>
                         <div className="relative">
                           <DollarSign className="absolute left-2.5 top-1/2 -translate-y-1/2 size-3 text-muted-foreground" />
@@ -2191,7 +3367,7 @@ function CustomerDetailView() {
 
                       <div className="space-y-1">
                         <label className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
-                          PTP Due Date
+                          Promised Date
                         </label>
                         <input
                           type="date"
@@ -2203,7 +3379,7 @@ function CustomerDetailView() {
 
                       <div className="space-y-1">
                         <label className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
-                          Payment Mode
+                          Payment Method
                         </label>
                         <select
                           value={ptpPaymentMode}
@@ -2211,17 +3387,17 @@ function CustomerDetailView() {
                           className="w-full rounded-lg border border-border bg-muted/30 p-1.5 text-xs font-bold text-foreground focus:outline-hidden focus:border-primary cursor-pointer"
                         >
                           <option value="UPI / Instant Transfer">UPI / Instant Transfer</option>
-                          <option value="NetBanking / Bank Transfer">NetBanking / NEFT</option>
-                          <option value="Branch Cashier Visit">Branch Cashier Visit</option>
-                          <option value="Field Agent Cash Pickup">Field Agent Cash Pickup</option>
-                          <option value="Post-Dated Cheque (PDC)">Post-Dated Cheque (PDC)</option>
+                          <option value="NetBanking / Bank Transfer">Bank Transfer</option>
+                          <option value="Branch Cashier Visit">Branch Counter Payment</option>
+                          <option value="Field Agent Cash Pickup">Field Payment Pickup</option>
+                          <option value="Post-Dated Cheque (PDC)">Cheque</option>
                         </select>
                       </div>
                     </div>
                   )}
                 </div>
 
-                {/* Step 5: Notes & Remarks (Collapsible with arrow) */}
+                {/* Step 5: Notes */}
                 <div className="rounded-xl border border-border/80 bg-muted/20 p-3 space-y-2">
                   <button
                     type="button"
@@ -2230,11 +3406,13 @@ function CustomerDetailView() {
                   >
                     <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
                       <FileText className="size-3 text-primary" />
-                      <span>3. Frontline Interaction Notes</span>
-                      <span className="text-[9.5px] font-normal text-muted-foreground/80">(Optional)</span>
+                      <span>Follow-up Notes</span>
+                      <span className="text-[9.5px] font-normal text-muted-foreground/80">
+                        (Optional)
+                      </span>
                     </span>
                     <span className="flex items-center gap-1 text-[10px] text-muted-foreground font-semibold hover:text-foreground">
-                      <span>Remarks</span>
+                      <span>{notesOpen ? "Hide" : "Show"}</span>
                       {notesOpen ? (
                         <ChevronUp className="size-3.5 text-muted-foreground" />
                       ) : (
@@ -2249,15 +3427,15 @@ function CustomerDetailView() {
                         rows={2}
                         value={feedbackNotes}
                         onChange={(e) => setFeedbackNotes(e.target.value)}
-                        placeholder="Enter frontline remarks, customer statements, or commitments discussed..."
+                        placeholder="Add short notes about what the customer shared or next steps agreed..."
                         className="w-full rounded-xl border border-border bg-card p-2 text-xs text-foreground focus:outline-hidden focus:border-primary"
                       />
                       <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
                         {[
-                          "Salary credited on 5th",
-                          "Promised UPI transfer by 6 PM",
-                          "Met spouse at premises",
-                          "Medical hardship cited",
+                          "Salary arrives next week",
+                          "Promised online payment today",
+                          "Spoke with family member",
+                          "Reported temporary financial difficulty",
                         ].map((chip) => (
                           <button
                             key={chip}
@@ -2288,483 +3466,18 @@ function CustomerDetailView() {
               </button>
               <button
                 type="button"
-                onClick={handleStoreFeedback}
-                className="rounded-xl bg-primary hover:bg-primary/90 px-4 py-2 text-xs font-bold text-primary-foreground transition shadow-sm flex items-center gap-2 cursor-pointer"
+                disabled={nbaFeedbackMutation.isPending}
+                onClick={() => void handleStoreFeedback()}
+                className="rounded-xl bg-primary hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed px-4 py-2 text-xs font-bold text-primary-foreground transition shadow-sm flex items-center gap-2 cursor-pointer"
               >
                 <Save className="size-3.5" />
-                <span>Save Outcome &amp; Store Feedback</span>
+                <span>{nbaFeedbackMutation.isPending ? "Saving..." : "Save Action Outcome"}</span>
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* NO ACTION DEFERRAL MODAL */}
-      {noActionModalOpen && (
-        <div className="fixed inset-0 z-50 grid place-items-center p-4">
-          <button
-            aria-label="Close no action modal backdrop"
-            className="absolute inset-0 bg-foreground/30 backdrop-blur-xs transition"
-            onClick={() => setNoActionModalOpen(false)}
-          />
-
-          <div className="relative w-full max-w-lg rounded-2xl border border-border/80 bg-card p-6 shadow-2xl space-y-4 text-xs z-10">
-            <div className="flex items-center justify-between border-b border-border/70 pb-3">
-              <div>
-                <span className="text-[10px] font-bold uppercase tracking-wider text-rose-600 dark:text-rose-400">
-                  Frontline Scheduling &amp; Postponement
-                </span>
-                <h3 className="text-base font-bold text-foreground">Action Postponed / Not Taken</h3>
-              </div>
-              <button
-                className="size-8 rounded-lg hover:bg-muted grid place-items-center text-muted-foreground hover:text-foreground cursor-pointer"
-                onClick={() => setNoActionModalOpen(false)}
-              >
-                <X className="size-4" />
-              </button>
-            </div>
-
-            <p className="text-muted-foreground leading-relaxed">
-              Record why outreach action was deferred for <strong className="text-foreground">{c.name}</strong> and schedule the next follow-up touchpoint:
-            </p>
-
-            <div className="space-y-1.5">
-              <label className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
-                Primary Reason for Non-Execution
-              </label>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                {[
-                  "Customer Travel / Out of Station",
-                  "Customer Unreachable / Phone Switched Off",
-                  "Rescheduled to Alternate Shift",
-                  "Awaiting Supervisor Credit Clearance",
-                  "Regulatory Cooling-Off Window Active",
-                  "Customer Escalated to Legal / Ombudsman",
-                ].map((reason) => (
-                  <button
-                    key={reason}
-                    type="button"
-                    onClick={() => setNotTakenReason(reason)}
-                    className={`rounded-lg border p-2 text-xs font-bold text-left transition cursor-pointer ${
-                      notTakenReason === reason
-                        ? "border-rose-500 bg-rose-500/15 text-rose-900 dark:text-rose-200 shadow-xs"
-                        : "border-border bg-muted/20 hover:bg-muted/40 text-foreground"
-                    }`}
-                  >
-                    {reason}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
-              <div className="space-y-1">
-                <label className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
-                  Next Planned Outreach Date
-                </label>
-                <input
-                  type="date"
-                  value={rescheduleDate}
-                  onChange={(e) => setRescheduleDate(e.target.value)}
-                  className="w-full rounded-lg border border-border bg-card p-2 text-xs font-bold text-foreground focus:outline-hidden focus:border-primary cursor-pointer"
-                />
-              </div>
-              <div className="space-y-1">
-                <label className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
-                  Collector Notes
-                </label>
-                <input
-                  type="text"
-                  value={notTakenNotes}
-                  onChange={(e) => setNotTakenNotes(e.target.value)}
-                  placeholder="Optional notes..."
-                  className="w-full rounded-lg border border-border bg-card p-2 text-xs text-foreground focus:outline-hidden focus:border-primary"
-                />
-              </div>
-            </div>
-
-            <div className="flex items-center justify-end gap-2.5 pt-2 border-t border-border/70">
-              <button
-                type="button"
-                onClick={() => setNoActionModalOpen(false)}
-                className="px-3.5 py-1.5 rounded-lg border border-border bg-card hover:bg-muted text-xs font-bold text-foreground transition cursor-pointer"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={handleStoreNoActionFeedback}
-                className="px-4 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold shadow-xs transition flex items-center gap-1.5 cursor-pointer"
-              >
-                <Clock className="size-3.5" />
-                <span>Save Deferral &amp; Update Timeline</span>
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* OPERATIONAL CONFIRMATION & REVIEW DRAWER */}
-      {outreachDrawerOpen && (
-        <div className="fixed inset-0 z-50">
-          <button
-            aria-label="Close outreach review drawer"
-            className="absolute inset-0 bg-foreground/30 backdrop-blur-xs transition"
-            onClick={() => setOutreachDrawerOpen(false)}
-          />
-
-          <aside className="absolute inset-y-0 right-0 w-full max-w-xl bg-card border-l p-6 shadow-2xl overflow-y-auto">
-            <div className="flex items-center justify-between border-b pb-4">
-              <div>
-                <span className="text-[10px] font-bold uppercase tracking-wider text-primary">
-                  Operational Decision Panel
-                </span>
-                <h3 className="text-lg font-bold text-foreground">Next Best Action · Review &amp; Confirmation</h3>
-                <p className="text-xs text-muted-foreground mt-0.5">
-                  Account AL-{c.acct} · {c.name} ({c.dpd} DPD · ${c.exp.toLocaleString()})
-                </p>
-              </div>
-              <button
-                className="size-8 rounded-lg hover:bg-muted grid place-items-center text-muted-foreground hover:text-foreground"
-                onClick={() => setOutreachDrawerOpen(false)}
-              >
-                <X className="size-4" />
-              </button>
-            </div>
-
-            <div className="mt-5 space-y-4 text-xs">
-              {/* 1. CUSTOMER RESPONSE STATUS ("WHAT HE HAS RESPONDED OR NOT") */}
-              <div className="rounded-xl border border-border/80 bg-muted/20 p-4 space-y-3">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <Activity className="size-3.5 text-primary" />
-                    <span className="font-bold text-foreground text-xs uppercase tracking-wider">
-                      Customer Contact &amp; Response History
-                    </span>
-                  </div>
-                  <span className="rounded-md bg-muted px-2 py-0.5 text-[10px] font-mono text-muted-foreground">
-                    Last 30 Days
-                  </span>
-                </div>
-
-                <div className="space-y-2">
-                  {/* Phone Calls status */}
-                  <div className="rounded-lg border border-border/60 bg-card p-3 space-y-1">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <Phone className="size-3.5 text-primary" />
-                        <span className="font-bold text-foreground">Phone Outreach</span>
-                      </div>
-                      <span
-                        className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${
-                          c.reach >= 40
-                            ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400"
-                            : "bg-rose-500/15 text-rose-600 dark:text-rose-400"
-                        }`}
-                      >
-                        {c.reach >= 40 ? "Connected · Discussion Logged" : "No Answer · Unreachable"}
-                      </span>
-                    </div>
-                    <ul className="list-disc list-inside text-[11px] text-muted-foreground space-y-0.5 pt-0.5">
-                      <li>Total outreach attempts: <strong>{c.touches} calls logged</strong>.</li>
-                      <li>Last direct call attempt: <strong>{c.daysSinceOutreach}d ago</strong>.</li>
-                      <li>
-                        {c.reach >= 40
-                          ? "Customer acknowledged balance, requested cure options; call completed."
-                          : "Call rang out without answer; standard automated voicemail left."}
-                      </li>
-                    </ul>
-                  </div>
-
-                  {/* Email status */}
-                  <div className="rounded-lg border border-border/60 bg-card p-3 space-y-1">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <Mail className="size-3.5 text-primary" />
-                        <span className="font-bold text-foreground">Email &amp; Digital Notices</span>
-                      </div>
-                      <span
-                        className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${
-                          c.click > 20
-                            ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400"
-                            : "bg-amber-500/15 text-amber-600 dark:text-amber-400"
-                        }`}
-                      >
-                        {c.click > 20 ? "Delivered · Link Clicked" : "Delivered · Opened"}
-                      </span>
-                    </div>
-                    <ul className="list-disc list-inside text-[11px] text-muted-foreground space-y-0.5 pt-0.5">
-                      <li>Dispatched notice: <strong>{c.content[0]}</strong> ({c.daysSinceOutreach + 3}d ago).</li>
-                      <li>
-                        Customer engagement: <strong>{c.open}% open rate</strong> · <strong>{c.click}% link click-through</strong>.
-                      </li>
-                      <li>Payment portal visited; self-service transaction pending.</li>
-                    </ul>
-                  </div>
-
-                  {/* Field Visit status */}
-                  <div className="rounded-lg border border-border/60 bg-card p-3 space-y-1">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <MapPin className="size-3.5 text-primary" />
-                        <span className="font-bold text-foreground">Field Recovery Visit</span>
-                      </div>
-                      <span
-                        className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${
-                          c.dpd >= 30
-                            ? "bg-purple-500/15 text-purple-600 dark:text-purple-400"
-                            : "bg-muted text-muted-foreground"
-                        }`}
-                      >
-                        {c.dpd >= 30 ? "Escalation Eligible (30+ DPD)" : "Not Initiated (<30 DPD)"}
-                      </span>
-                    </div>
-                    <ul className="list-disc list-inside text-[11px] text-muted-foreground space-y-0.5 pt-0.5">
-                      <li>Prior doorstep visits: <strong>None logged</strong>.</li>
-                      <li>
-                        {c.dpd >= 30
-                          ? "Authorized for doorstep demand letter if phone and email remain unresponsive."
-                          : "Policy prioritizes phone and email touchpoints for early-stage accounts."}
-                      </li>
-                    </ul>
-                  </div>
-                </div>
-
-                {/* Summary Highlight */}
-                <div className="rounded-lg bg-primary/10 border border-primary/20 p-2.5 text-[11px] text-primary flex items-center gap-2">
-                  <CheckCircle2 className="size-3.5 shrink-0" />
-                  <span>
-                    <strong>Response Summary:</strong>{" "}
-                    {c.reach < 40
-                      ? "Customer actively opens digital notices but has not answered direct telephone calls."
-                      : "Customer answered previous telephone contact; pending execution of committed cure."}
-                  </span>
-                </div>
-              </div>
-
-              {/* 2. WHAT THE MANAGER CHOOSES (CHANNEL SELECTOR) */}
-              <div className="rounded-xl border border-border/80 bg-card p-4 space-y-3">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <Sliders className="size-3.5 text-primary" />
-                    <span className="font-bold text-foreground text-xs uppercase tracking-wider">
-                      Manager Channel Selection
-                    </span>
-                  </div>
-                  <span className="text-[10.5px] text-muted-foreground">Select to override recommendation</span>
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
-                  {rawCandidates.map((candidate) => {
-                    const isSelected = drawerSelectedChannel === candidate.name;
-                    const isRecommended = primaryRecommendation.code === candidate.code;
-
-                    return (
-                      <button
-                        key={candidate.code}
-                        type="button"
-                        onClick={() => setDrawerSelectedChannel(candidate.name)}
-                        className={`rounded-xl border p-3 text-left transition flex flex-col justify-between ${
-                          isSelected
-                            ? "border-primary bg-primary/10 shadow-xs ring-1 ring-primary"
-                            : "border-border/70 bg-card hover:bg-muted/30"
-                        }`}
-                      >
-                        <div>
-                          <div className="flex items-center justify-between mb-1.5">
-                            <candidate.icon className={`size-4 ${isSelected ? "text-primary" : "text-muted-foreground"}`} />
-                            {isRecommended && (
-                              <span className="rounded-full bg-primary/20 text-primary px-1.5 py-0.2 text-[8.5px] font-bold">
-                                Recommended
-                              </span>
-                            )}
-                          </div>
-                          <div className="font-bold text-foreground text-xs">{candidate.label}</div>
-                          <div className="text-[10px] text-muted-foreground mt-0.5">
-                            Success: <strong className="text-foreground">{candidate.successRate}%</strong>
-                          </div>
-                        </div>
-
-                        <div className="mt-2 pt-1.5 border-t border-border/60 text-[9.5px] flex items-center justify-between">
-                          <span className="text-muted-foreground">Suitability:</span>
-                          <span className="font-mono font-bold text-primary">
-                            {(0.6 * (candidate.successRate / 100) + 0.4 * (candidate.responseRate / 100)).toFixed(3)}
-                          </span>
-                        </div>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {/* 3. TIME AND OTHER THINGS TO SELECT SO THAT WE CAN PROCEED */}
-              <div className="rounded-xl border border-border/80 bg-muted/20 p-4 space-y-3">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <Clock className="size-3.5 text-primary" />
-                    <span className="font-bold text-foreground text-xs uppercase tracking-wider">
-                      Contact Timing Window &amp; Objective
-                    </span>
-                  </div>
-                  <span className="text-[10px] font-mono text-muted-foreground">09:00–18:00 Window</span>
-                </div>
-
-                <div className="space-y-3">
-                  <div>
-                    <label className="block text-[11px] font-semibold text-muted-foreground mb-1.5">
-                      Select Contact Window (Local Customer Timezone)
-                    </label>
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                      {[
-                        { time: "10:00 AM – 12:30 PM", label: "Morning", badge: "Recommended" },
-                        { time: "02:00 PM – 04:00 PM", label: "Afternoon", badge: "Standard" },
-                        { time: "04:00 PM – 06:00 PM", label: "Late Afternoon", badge: "Secondary" },
-                      ].map((slot) => (
-                        <button
-                          key={slot.time}
-                          type="button"
-                          onClick={() => setDrawerSelectedTime(slot.time)}
-                          className={`rounded-lg border px-3 py-2 text-left transition ${
-                            drawerSelectedTime === slot.time
-                              ? "border-primary bg-card ring-1 ring-primary shadow-xs"
-                              : "border-border/70 bg-card/60 hover:bg-card text-muted-foreground"
-                          }`}
-                        >
-                          <div className="flex items-center justify-between">
-                            <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
-                              {slot.label}
-                            </span>
-                            {slot.badge === "Recommended" && (
-                              <span className="rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 px-1 py-0.2 text-[8px] font-bold">
-                                Optimal
-                              </span>
-                            )}
-                          </div>
-                          <div className="font-mono font-bold text-foreground text-xs mt-0.5">{slot.time}</div>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className="block text-[11px] font-semibold text-muted-foreground mb-1.5">
-                      Select Outreach Objective / Resolution Target
-                    </label>
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                      {[
-                        { id: "Immediate Partial Cure", label: "Partial Cure", desc: `$${Math.round(c.exp * 0.25).toLocaleString()} (25%)` },
-                        { id: "Full Balance Cure", label: "Full Balance", desc: `$${c.exp.toLocaleString()}` },
-                        { id: "Promise to Pay (PTP)", label: "Structured PTP", desc: "7-day commitment" },
-                      ].map((obj) => (
-                        <button
-                          key={obj.id}
-                          type="button"
-                          onClick={() => setDrawerObjective(obj.id)}
-                          className={`rounded-lg border p-2.5 text-left transition ${
-                            drawerObjective === obj.id
-                              ? "border-primary bg-card ring-1 ring-primary shadow-xs"
-                              : "border-border/70 bg-card/60 hover:bg-card text-muted-foreground"
-                          }`}
-                        >
-                          <div className="font-bold text-foreground text-xs">{obj.label}</div>
-                          <div className="text-[10px] text-muted-foreground mt-0.5">{obj.desc}</div>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* 4. KEY ACTION POINTS ("GO WITH SOME POINTS !!") */}
-              <div className="rounded-xl border border-border/80 bg-card p-4 space-y-2.5">
-                <div className="flex items-center gap-2">
-                  <FileText className="size-3.5 text-primary" />
-                  <span className="font-bold text-foreground text-xs uppercase tracking-wider">
-                    Operational Decision Summary Points
-                  </span>
-                </div>
-
-                <div className="rounded-lg bg-muted/20 border border-border/60 p-3 space-y-2 text-[11px]">
-                  <div className="flex items-start gap-2">
-                    <span className="text-primary font-bold">•</span>
-                    <span className="text-muted-foreground">
-                      <strong>Delinquency &amp; Exposure:</strong> Account AL-{c.acct} has an outstanding overdue balance of{" "}
-                      <strong className="text-foreground">${c.exp.toLocaleString()}</strong> at{" "}
-                      <strong className="text-foreground">{c.dpd} DPD</strong> ({riskBucket}).
-                    </span>
-                  </div>
-                  <div className="flex items-start gap-2">
-                    <span className="text-primary font-bold">•</span>
-                    <span className="text-muted-foreground">
-                      <strong>Repayment Track:</strong> Customer exhibits <strong>{c.repaymentType.toLowerCase()}</strong> behavior with{" "}
-                      <strong className="text-foreground">{c.cov}%</strong> historical coverage ratio; {c.pays} payments in the last 30 days.
-                    </span>
-                  </div>
-                  <div className="flex items-start gap-2">
-                    <span className="text-primary font-bold">•</span>
-                    <span className="text-muted-foreground">
-                      <strong>Regulatory Clearance:</strong> 48-hour cooldown verified (<strong>{c.daysSinceOutreach}d elapsed</strong>), DNC registry clear, allowed 09:00–18:00 window.
-                    </span>
-                  </div>
-                  <div className="flex items-start gap-2">
-                    <span className="text-primary font-bold">•</span>
-                    <span className="text-muted-foreground">
-                      <strong>Follow-up Process:</strong> Approving schedules{" "}
-                      <strong className="text-foreground">{drawerSelectedChannel}</strong> for{" "}
-                      <strong className="text-foreground">{drawerSelectedTime}</strong> targeting{" "}
-                      <strong className="text-foreground">{drawerObjective}</strong>, followed by standard {c.cad[0].toLowerCase()} cadence.
-                    </span>
-                  </div>
-                </div>
-              </div>
-
-              {/* 5. ACCEPT OR REJECT ACCORDINGLY */}
-              <div className="pt-2 border-t border-border/70 flex items-center gap-3">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setOutreachDrawerOpen(false);
-                    setRejectionModalOpen(true);
-                  }}
-                  className="flex-1 rounded-xl border border-rose-500/30 bg-rose-500/10 hover:bg-rose-500/20 text-rose-700 dark:text-rose-300 py-2.5 text-xs font-bold transition shadow-xs flex items-center justify-center gap-1.5"
-                >
-                  <X className="size-3.5" /> Reject Action
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    setOverrideChannel(drawerSelectedChannel);
-                    setSelectedTimingWindow(drawerSelectedTime);
-                    setCollectorStatus("APPROVED");
-                    setOutreachDrawerOpen(false);
-                    const channelLabel =
-                      drawerSelectedChannel === "Phone calls"
-                        ? "Phone Call"
-                        : drawerSelectedChannel === "Mails"
-                          ? "Email"
-                          : "Field Visit";
-                    toast.success(`Action approved: ${channelLabel} scheduled for ${drawerSelectedTime}`);
-                    setTimelineList((prev) => [
-                      {
-                        title: `NBA Approved: ${channelLabel} (${drawerSelectedTime})`,
-                        category: "Next Best Action",
-                        time: "Just now",
-                        status: `Approved · ${drawerObjective}`,
-                        tone: "green",
-                      },
-                      ...prev,
-                    ]);
-                  }}
-                  className="flex-2 rounded-xl bg-primary hover:bg-primary/90 text-primary-foreground py-2.5 text-xs font-bold transition shadow-sm flex items-center justify-center gap-1.5"
-                >
-                  <Check className="size-3.5" /> Accept &amp; Schedule Action
-                </button>
-              </div>
-            </div>
-          </aside>
-        </div>
-      )}
       {/* REJECTION ACTION MODAL */}
       {rejectionModalOpen && (
         <div className="fixed inset-0 z-50 grid place-items-center p-4">
@@ -2778,9 +3491,9 @@ function CustomerDetailView() {
             <div className="flex items-center justify-between border-b border-border/70 pb-3">
               <div>
                 <span className="text-[10px] font-bold uppercase tracking-wider text-rose-600 dark:text-rose-400">
-                  Supervisor &amp; Compliance Audit
+                  Team Decision Log
                 </span>
-                <h3 className="text-base font-bold text-foreground">Reject Next Best Action</h3>
+                <h3 className="text-base font-bold text-foreground">Decline Recommended Action</h3>
               </div>
               <button
                 className="size-8 rounded-lg hover:bg-muted grid place-items-center text-muted-foreground hover:text-foreground"
@@ -2791,8 +3504,10 @@ function CustomerDetailView() {
             </div>
 
             <p className="text-muted-foreground leading-relaxed">
-              Decline the prescribed <strong className="text-foreground">{actionHeadline}</strong> via{" "}
-              <strong className="text-foreground">{channelDisplayLabel}</strong> for {c.name}. Select the verified operational reason to record in the compliance audit trail:
+              Decline the recommended{" "}
+              <strong className="text-foreground">{nbaPresentation.hero.title}</strong> via{" "}
+              <strong className="text-foreground">{channelDisplayLabel}</strong> for {c.name}.
+              Choose a reason so the team knows why this action was declined:
             </p>
 
             <div className="space-y-2">
@@ -2800,27 +3515,27 @@ function CustomerDetailView() {
                 {
                   id: "Customer Requested Hardship Pause",
                   label: "Customer Requested Hardship Pause",
-                  desc: "Customer reported emergency or medical disruption; temporary contact hold requested.",
+                  desc: "Customer reported a temporary hardship or emergency; contact pause requested.",
                 },
                 {
                   id: "Incorrect / Disputed Contact Details",
                   label: "Incorrect or Disputed Contact Details",
-                  desc: "Phone or email endpoint on file bounced or flagged as unverified.",
+                  desc: "Phone number or email on file bounced or needs verification.",
                 },
                 {
                   id: "Disputed Balance / Escalated to Disputes",
                   label: "Disputed Balance / Sent to Disputes",
-                  desc: "Customer raised formal dispute over invoice or transaction balance.",
+                  desc: "Customer raised a question or dispute about the amount owed.",
                 },
                 {
                   id: "Collector Judgment Override",
-                  label: "Collector Operational Judgment",
-                  desc: "Collector evaluated offline account circumstances requiring an alternate approach.",
+                  label: "Team Operational Judgment",
+                  desc: "Account context requires a different approach based on team review.",
                 },
                 {
                   id: "Promise to Pay Already Handled Offline",
-                  label: "Promise to Pay Handled Offline",
-                  desc: "Payment commitment was received via physical branch or banking app.",
+                  label: "Payment Arrangement Handled Offline",
+                  desc: "Customer already confirmed payment at a branch or through banking channels.",
                 },
               ].map((reason) => (
                 <label
@@ -2849,13 +3564,13 @@ function CustomerDetailView() {
 
             <div>
               <label className="block text-[11px] font-semibold text-muted-foreground mb-1">
-                Additional Compliance Notes (Optional)
+                Additional Notes (Optional)
               </label>
               <textarea
                 rows={2}
                 value={rejectionNotes}
                 onChange={(e) => setRejectionNotes(e.target.value)}
-                placeholder="Enter details for branch supervisor audit log..."
+                placeholder="Enter details for your team log..."
                 className="w-full rounded-lg border border-border/80 bg-muted/20 p-2 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
               />
             </div>
@@ -2870,166 +3585,260 @@ function CustomerDetailView() {
               </button>
               <button
                 type="button"
-                onClick={handleRejectNBA}
-                className="rounded-xl bg-rose-600 hover:bg-rose-700 px-4 py-2 text-xs font-bold text-white transition shadow-sm"
+                disabled={nbaDecisionMutation.isPending}
+                onClick={() => void handleRejectNBA()}
+                className="rounded-xl bg-rose-600 hover:bg-rose-700 disabled:opacity-50 disabled:cursor-not-allowed px-4 py-2 text-xs font-bold text-white transition shadow-sm cursor-pointer"
               >
-                Confirm Rejection
+                {nbaDecisionMutation.isPending ? "Saving..." : "Confirm Decline"}
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* CHANGE CHANNEL NAVIGATION / MODAL */}
-      {changeChannelModalOpen && (
-        <div className="fixed inset-0 z-50 grid place-items-center p-4">
-          <button
-            aria-label="Close change channel modal backdrop"
-            className="absolute inset-0 bg-foreground/30 backdrop-blur-xs transition"
-            onClick={() => setChangeChannelModalOpen(false)}
-          />
+      {/* CHANGE CHANNEL / ACTION SELECTION MODAL */}
+      {changeChannelModalOpen &&
+        (() => {
+          const canApplyOverride =
+            !isHoldSuppressed &&
+            !hasPolicyBlock &&
+            (activeNba ? activeNba.eligibleArms.includes(selectedArmChoice) : true) &&
+            !nbaDecisionMutation.isPending;
 
-          <div className="relative w-full max-w-lg rounded-2xl border border-border/80 bg-card p-6 shadow-2xl space-y-4 text-xs z-10">
-            <div className="flex items-center justify-between border-b border-border/70 pb-3">
-              <div>
-                <span className="text-[10px] font-bold uppercase tracking-wider text-primary">
-                  Channel Selection &amp; Navigation
-                </span>
-                <h3 className="text-base font-bold text-foreground">Change Outreach Channel</h3>
-              </div>
+          return (
+            <div className="fixed inset-0 z-50 grid place-items-center p-4">
               <button
-                className="size-8 rounded-lg hover:bg-muted grid place-items-center text-muted-foreground hover:text-foreground"
+                aria-label="Close change channel modal backdrop"
+                className="absolute inset-0 bg-foreground/30 backdrop-blur-xs transition"
                 onClick={() => setChangeChannelModalOpen(false)}
-              >
-                <X className="size-4" />
-              </button>
-            </div>
+              />
 
-            <div className="rounded-xl border border-border/70 bg-muted/30 p-3 text-xs flex justify-between items-center">
-              <div>
-                <span className="font-bold text-foreground">{c.name}</span> ({c.acct})
-                <div className="text-[11px] text-muted-foreground mt-0.5">
-                  Due: ${c.exp.toLocaleString()} · {c.dpd} DPD ({riskBucket})
-                </div>
-              </div>
-              <span className="rounded-md bg-primary/10 border border-primary/20 px-2 py-0.5 text-[10px] font-bold text-primary">
-                Current: {channelDisplayLabel}
-              </span>
-            </div>
-
-            {/* CHANNEL CHOICES: ONLY Phone Call, Email, Field Visit */}
-            <div className="space-y-2">
-              <label className="block text-[11px] font-semibold text-muted-foreground">
-                Select Communication Channel (Only Supported Recovery Channels)
-              </label>
-
-              {rawCandidates.map((cand) => {
-                const isSelected = selectedChannelChoice === cand.name || selectedChannelChoice === cand.label;
-                return (
-                  <div
-                    key={cand.code}
-                    onClick={() => setSelectedChannelChoice(cand.name)}
-                    className={`rounded-xl border p-3.5 cursor-pointer transition flex items-center justify-between gap-3 ${
-                      isSelected
-                        ? "border-primary bg-primary/10 shadow-xs"
-                        : "border-border/70 bg-muted/20 hover:bg-muted/40"
-                    }`}
+              <div className="relative w-full max-w-lg rounded-2xl border border-border/80 bg-card p-6 shadow-2xl space-y-4 text-xs z-10 max-h-[90vh] overflow-y-auto">
+                <div className="flex items-center justify-between border-b border-border/70 pb-3">
+                  <div>
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-primary">
+                      Alternative Contact Options
+                    </span>
+                    <h3 className="text-base font-bold text-foreground">Choose Another Action</h3>
+                  </div>
+                  <button
+                    type="button"
+                    className="size-8 rounded-lg hover:bg-muted grid place-items-center text-muted-foreground hover:text-foreground cursor-pointer"
+                    onClick={() => setChangeChannelModalOpen(false)}
                   >
-                    <div className="flex items-center gap-3">
-                      <div
-                        className={`size-9 rounded-lg grid place-items-center ${
-                          isSelected
-                            ? "bg-primary text-primary-foreground"
-                            : "bg-muted text-muted-foreground"
-                        }`}
-                      >
-                        <cand.icon className="size-4" />
-                      </div>
-                      <div>
-                        <div className="font-bold text-foreground text-xs flex items-center gap-1.5">
-                          {cand.label}
-                          {cand.name === primaryRecommendation.name && (
-                            <span className="rounded-md bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 px-1.5 py-0.2 text-[9px] font-bold">
-                              Model Prescribed
-                            </span>
-                          )}
-                        </div>
-                        <div className="text-[11px] text-muted-foreground mt-0.5">
-                          Success: <strong>{cand.successRate}%</strong> · Response: <strong>{cand.responseRate}%</strong>
-                        </div>
-                      </div>
-                    </div>
+                    <X className="size-4" />
+                  </button>
+                </div>
 
-                    <div className="text-right shrink-0">
-                      <span
-                        className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
-                          cand.permitted
-                            ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
-                            : "bg-amber-500/10 text-amber-600 dark:text-amber-400"
-                        }`}
-                      >
-                        {cand.permitted ? "Permitted" : "Requires Exception"}
-                      </span>
+                <div className="rounded-xl border border-border/70 bg-muted/30 p-3 text-xs flex justify-between items-center gap-2">
+                  <div>
+                    <span className="font-bold text-foreground">{c.name}</span> ({c.acct})
+                    <div className="text-[11px] text-muted-foreground mt-0.5">
+                      Overdue: ${pastDueAmt.toLocaleString()} · Remaining: $
+                      {remainingBal.toLocaleString()} ·{" "}
+                      {c.dpd === 0 ? "Up to date" : `${c.dpd} days overdue`} (
+                      {nbaPresentation.snapshot.paymentStatus.categoryBadge.toLowerCase()})
                     </div>
                   </div>
-                );
-              })}
-            </div>
+                  <span className="rounded-md bg-primary/10 border border-primary/20 px-2 py-0.5 text-[10px] font-bold text-primary shrink-0">
+                    Current: {nbaPresentation.hero.title}
+                  </span>
+                </div>
 
-            {/* TIMING WINDOW SELECTOR */}
-            <div>
-              <label className="block text-[11px] font-semibold text-muted-foreground mb-1.5">
-                Preferred Contact Timing Window (09:00–18:00 Approved)
-              </label>
-              <div className="grid grid-cols-3 gap-2">
-                {[
-                  "10:00 AM – 12:30 PM",
-                  "02:00 PM – 04:00 PM",
-                  "04:00 PM – 06:00 PM",
-                ].map((slot) => (
+                {/* ACTION OPTIONS LIST (Available Actions Only, deduplicated by clean action title) */}
+                {(() => {
+                  const eligibleActionCodes = (() => {
+                    if (!activeNba || isHoldSuppressed) return [];
+                    const rankedPool: string[] = [
+                      ...(activeNba.eligibleArms.includes(activeNba.recommendedAction)
+                        ? [activeNba.recommendedAction]
+                        : []),
+                      ...activeNba.alternativeEligibleActions.map((a) => a.actionCode),
+                      ...NBA_ACTION_ORDER,
+                    ];
+                    const byTitle = new Map<string, string>();
+                    for (const armCode of rankedPool) {
+                      if (armCode === "ACT_HOLD_SUPPRESS") continue;
+                      if (!activeNba.eligibleArms.includes(armCode)) continue;
+                      const title = getBusinessActionMeta(armCode).cardTitle;
+                      if (!byTitle.has(title)) {
+                        byTitle.set(title, armCode);
+                      }
+                    }
+                    return NBA_ACTION_ORDER.filter(
+                      (armCode) =>
+                        byTitle.get(getBusinessActionMeta(armCode).cardTitle) === armCode,
+                    );
+                  })();
+                  const permittedOfflineCandidates = rawCandidates.filter((cand) => cand.permitted);
+
+                  return (
+                    <div className="space-y-2">
+                      <label className="block text-[11px] font-semibold text-muted-foreground">
+                        {activeNba
+                          ? `${eligibleActionCodes.length} available option${eligibleActionCodes.length === 1 ? "" : "s"} for this account`
+                          : "Available Communication Channels"}
+                      </label>
+
+                      <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
+                        {activeNba ? (
+                          eligibleActionCodes.length > 0 ? (
+                            eligibleActionCodes.map((armCode) => {
+                              const armMeta = NBA_ACTION_META[armCode];
+                              const bizMeta = getBusinessActionMeta(armCode);
+                              const isModelTop =
+                                armCode === activeNba.recommendedAction ||
+                                getBusinessActionMeta(activeNba.recommendedAction).cardTitle ===
+                                  bizMeta.cardTitle;
+                              const isSelected =
+                                selectedArmChoice === armCode ||
+                                getBusinessActionMeta(selectedArmChoice).cardTitle ===
+                                  bizMeta.cardTitle;
+                              const ArmIcon =
+                                armMeta?.channelCode === "PHONE"
+                                  ? Phone
+                                  : armMeta?.channelCode === "FIELD_VISIT"
+                                    ? MapPin
+                                    : Mail;
+
+                              return (
+                                <button
+                                  key={armCode}
+                                  type="button"
+                                  onClick={() => setSelectedArmChoice(armCode)}
+                                  className={`w-full text-left rounded-xl border p-3 transition flex items-center justify-between gap-3 cursor-pointer ${
+                                    isSelected
+                                      ? "border-primary bg-primary/10 shadow-xs"
+                                      : "border-border/70 bg-muted/20 hover:bg-muted/40"
+                                  }`}
+                                >
+                                  <div className="flex items-center gap-3 min-w-0">
+                                    <div
+                                      className={`size-9 rounded-lg grid place-items-center shrink-0 ${
+                                        isSelected
+                                          ? "bg-primary text-primary-foreground"
+                                          : "bg-muted text-muted-foreground"
+                                      }`}
+                                    >
+                                      <ArmIcon className="size-4" />
+                                    </div>
+                                    <div className="min-w-0">
+                                      <div className="font-bold text-foreground text-xs flex items-center gap-1.5 flex-wrap">
+                                        <span>{bizMeta.cardTitle}</span>
+                                        {isModelTop && (
+                                          <span className="rounded-md bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 px-1.5 py-0.2 text-[9px] font-bold">
+                                            Recommended
+                                          </span>
+                                        )}
+                                      </div>
+                                      <div className="text-[11px] text-muted-foreground mt-0.5 leading-snug">
+                                        {bizMeta.shortDescription}
+                                      </div>
+                                    </div>
+                                  </div>
+
+                                  <div className="text-right shrink-0">
+                                    <span className="rounded-full px-2 py-0.5 text-[10px] font-semibold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
+                                      Available
+                                    </span>
+                                  </div>
+                                </button>
+                              );
+                            })
+                          ) : (
+                            <div className="rounded-xl border border-border/70 bg-muted/20 px-3.5 py-3 text-[11px] text-muted-foreground">
+                              No outreach actions are currently available for this account.
+                            </div>
+                          )
+                        ) : permittedOfflineCandidates.length > 0 ? (
+                          permittedOfflineCandidates.map((cand) => {
+                            const armCode =
+                              cand.code === "PHONE"
+                                ? "ACT_PHONE_STANDARD"
+                                : cand.code === "FIELD"
+                                  ? "ACT_FIELD_VISIT_STANDARD"
+                                  : "ACT_DIGITAL_REMINDER_EMAIL";
+                            const bizMeta = getBusinessActionMeta(armCode);
+                            const isSelected = selectedArmChoice === armCode;
+                            return (
+                              <button
+                                key={cand.code}
+                                type="button"
+                                onClick={() => setSelectedArmChoice(armCode)}
+                                className={`w-full text-left rounded-xl border p-3.5 transition flex items-center justify-between gap-3 cursor-pointer ${
+                                  isSelected
+                                    ? "border-primary bg-primary/10 shadow-xs"
+                                    : "border-border/70 bg-muted/20 hover:bg-muted/40"
+                                }`}
+                              >
+                                <div className="flex items-center gap-3 min-w-0">
+                                  <div
+                                    className={`size-9 rounded-lg grid place-items-center shrink-0 ${
+                                      isSelected
+                                        ? "bg-primary text-primary-foreground"
+                                        : "bg-muted text-muted-foreground"
+                                    }`}
+                                  >
+                                    <cand.icon className="size-4" />
+                                  </div>
+                                  <div className="min-w-0">
+                                    <div className="font-bold text-foreground text-xs flex items-center gap-1.5 flex-wrap">
+                                      <span>{bizMeta.cardTitle}</span>
+                                      {cand.name === primaryRecommendation.name && (
+                                        <span className="rounded-md bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 px-1.5 py-0.2 text-[9px] font-bold">
+                                          Recommended
+                                        </span>
+                                      )}
+                                    </div>
+                                    <div className="text-[11px] text-muted-foreground mt-0.5 leading-snug">
+                                      {bizMeta.shortDescription}
+                                    </div>
+                                  </div>
+                                </div>
+
+                                <div className="text-right shrink-0">
+                                  <span className="rounded-full px-2 py-0.5 text-[10px] font-semibold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
+                                    Available
+                                  </span>
+                                </div>
+                              </button>
+                            );
+                          })
+                        ) : (
+                          <div className="rounded-xl border border-border/70 bg-muted/20 px-3.5 py-3 text-[11px] text-muted-foreground">
+                            No outreach actions are currently available for this account.
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                <div className="flex items-center justify-end gap-2 pt-2 border-t border-border/70">
                   <button
-                    key={slot}
                     type="button"
-                    onClick={() => setSelectedTimingWindow(slot)}
-                    className={`rounded-lg border p-2 text-center text-xs font-semibold transition ${
-                      selectedTimingWindow === slot
-                        ? "border-primary bg-primary/10 text-primary"
-                        : "border-border/60 bg-muted/20 text-muted-foreground hover:bg-muted/40"
-                    }`}
+                    onClick={() => setChangeChannelModalOpen(false)}
+                    className="rounded-xl border border-border/80 px-4 py-2 text-xs font-semibold text-muted-foreground hover:bg-muted transition cursor-pointer"
                   >
-                    {slot}
+                    Cancel
                   </button>
-                ))}
+                  <button
+                    type="button"
+                    disabled={!canApplyOverride}
+                    onClick={() =>
+                      void handleChangeChannelSubmit(selectedArmChoice, selectedTimingWindow)
+                    }
+                    className="rounded-xl bg-primary hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed px-4 py-2 text-xs font-bold text-primary-foreground transition shadow-sm cursor-pointer"
+                  >
+                    {nbaDecisionMutation.isPending
+                      ? "Saving Selection..."
+                      : "Confirm Selected Action"}
+                  </button>
+                </div>
               </div>
             </div>
-
-            {/* COMPLIANCE & ELIGIBILITY VERIFICATION STRIP */}
-            <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-2.5 flex items-center gap-2 text-[11px] text-emerald-800 dark:text-emerald-300">
-              <CheckCircle2 className="size-4 shrink-0" />
-              <span>
-                Selected channel verified against compliance policy (Consent Active, DNC Clear, Permitted Window).
-              </span>
-            </div>
-
-            <div className="flex items-center justify-end gap-2 pt-2 border-t border-border/70">
-              <button
-                type="button"
-                onClick={() => setChangeChannelModalOpen(false)}
-                className="rounded-xl border border-border/80 px-4 py-2 text-xs font-semibold text-muted-foreground hover:bg-muted transition"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={() => handleChangeChannelSubmit(selectedChannelChoice, selectedTimingWindow)}
-                className="rounded-xl bg-primary hover:bg-primary/90 px-4 py-2 text-xs font-bold text-primary-foreground transition shadow-sm"
-              >
-                Apply Channel Update
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+          );
+        })()}
     </AppShell>
   );
 }

@@ -58,6 +58,13 @@ export const DEMO_SNAPSHOTS: DemoSnapshotPreset[] = [
     badge: "Quarter Close",
     description: "Q3 final reconciliation · Year-to-date write-off review",
   },
+  {
+    date: "2026-11-02",
+    label: "Nov 2, 2026",
+    quarterLabel: "Q4 · Nov 02",
+    badge: "Yesterday",
+    description: "Yesterday snapshot · Branch portfolio reconciliation",
+  },
 ];
 
 interface DateContextValue {
@@ -75,7 +82,7 @@ interface DateContextValue {
 const DateContext = createContext<DateContextValue | null>(null);
 
 const STORAGE_KEY = "recoveryops-selected-business-date";
-const DEFAULT_DATE = "2026-09-30";
+const DEFAULT_DATE = "2026-11-02";
 
 export function formatDateLabel(isoStr: string): string {
   const parts = isoStr.split("-");
@@ -102,7 +109,7 @@ export function formatDateLabel(isoStr: string): string {
 
 export function formatQuarterButtonLabel(isoStr: string): string {
   const parts = isoStr.split("-");
-  if (parts.length !== 3) return "Q3 · Jul–Sep";
+  if (parts.length !== 3) return "Q4 · Nov 02";
   const monthIdx = parseInt(parts[1]!, 10) - 1;
   const day = parseInt(parts[2]!, 10);
   const months = [
@@ -119,8 +126,9 @@ export function formatQuarterButtonLabel(isoStr: string): string {
     "Nov",
     "Dec",
   ];
+  const quarter = monthIdx < 3 ? "Q1" : monthIdx < 6 ? "Q2" : monthIdx < 9 ? "Q3" : "Q4";
   const dayStr = day < 10 ? `0${day}` : `${day}`;
-  return `Q3 · ${months[monthIdx]} ${dayStr}`;
+  return `${quarter} · ${months[monthIdx]} ${dayStr}`;
 }
 
 export function DateProvider({ children }: { children: ReactNode }) {
@@ -143,9 +151,8 @@ export function DateProvider({ children }: { children: ReactNode }) {
   }, [selectedDate]);
 
   const selectDate = (date: string) => {
-    // Clamp to Q3 2026 (2026-07-01 to 2026-09-30)
-    if (date < "2026-07-01") date = "2026-07-01";
-    if (date > "2026-09-30") date = "2026-09-30";
+    if (date < "2026-06-01") date = "2026-06-01";
+    if (date > "2026-11-02") date = "2026-11-02";
     setSelectedDate(date);
   };
 
@@ -155,8 +162,8 @@ export function DateProvider({ children }: { children: ReactNode }) {
     useMemo(() => {
       const parts = selectedDate.split("-");
       const y = parseInt(parts[0] || "2026", 10);
-      const m = parseInt(parts[1] || "9", 10);
-      const d = parseInt(parts[2] || "15", 10);
+      const m = parseInt(parts[1] || "11", 10);
+      const d = parseInt(parts[2] || "2", 10);
 
       return {
         formattedDate: formatDateLabel(selectedDate),

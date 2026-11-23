@@ -11,6 +11,16 @@ if (process.env.VERCEL || process.env.VERCEL_ENV) {
 }
 
 export default defineConfig({
+  vite: {
+    server: {
+      proxy: {
+        "/api": {
+          target: "http://localhost:3001",
+          changeOrigin: true,
+        },
+      },
+    },
+  },
   tanstackStart: {
     // Redirect TanStack Start's bundled server entry to src/server.ts (our SSR error wrapper).
     // nitro/vite builds from this

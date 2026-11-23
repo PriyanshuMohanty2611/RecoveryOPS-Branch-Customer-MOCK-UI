@@ -37,11 +37,13 @@ function formatCurrentDateTime(d: Date = new Date()): string {
     day: "numeric",
     year: "numeric",
   });
-  const timeStr = d.toLocaleTimeString("en-US", {
-    hour: "numeric",
-    minute: "2-digit",
-    hour12: true,
-  }).toLowerCase();
+  const timeStr = d
+    .toLocaleTimeString("en-US", {
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true,
+    })
+    .toLowerCase();
   return `${dateStr} · ${timeStr}`;
 }
 
@@ -63,7 +65,7 @@ export function AppShell({
   const [scrollProgress, setScrollProgress] = useState(0);
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const searchParams = useRouterState({
-    select: (s) => (s.location.search as Record<string, string | undefined>),
+    select: (s) => s.location.search as Record<string, string | undefined>,
   });
   const { selectedBranch, selectBranch, clearBranch, hasBranch } = useBranch();
   const { selectedDate } = useDate();
@@ -142,7 +144,6 @@ export function AppShell({
       setIsRefreshing(false);
     }
   };
-
 
   // Dynamic Blue Scroll Progress Line tracking viewport depth
   useEffect(() => {
@@ -347,7 +348,8 @@ export function AppShell({
                 </Link>
 
                 {/* Sub-views under Active Customer Branch (matching Image 2) */}
-                {activeCustomerBranch && (pathname === "/worklist" || pathname.startsWith("/customers/")) ? (
+                {activeCustomerBranch &&
+                (pathname === "/worklist" || pathname.startsWith("/customers/")) ? (
                   <div className="mt-2.5 space-y-1 rounded-xl border border-primary/20 bg-primary/5 p-2">
                     <div className="flex items-center justify-between px-2 py-1 text-[11px] font-bold text-primary">
                       <div className="flex items-center gap-1.5 truncate">

@@ -150,7 +150,6 @@ function NetworkLevelOverview() {
 
   const apiBranches = networkData?.data.branches;
   const networkAverages = networkData?.data.networkAverages ?? {};
-  const isDemo = networkData?.meta.isDemo ?? false;
   const asOfDate = networkData?.meta.asOfDate;
 
   const displayBranches: DisplayBranch[] = useMemo(() => {
@@ -277,13 +276,6 @@ function NetworkLevelOverview() {
       subtitle="State Network Analytics"
     >
       <div className="w-full space-y-5">
-        {isDemo && (
-          <div className="flex items-center gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-2 text-xs font-medium text-amber-700 dark:text-amber-400">
-            <AlertTriangle className="size-4 shrink-0" />
-            Demo Network Snapshot · Synthetic data for {asOfDate ?? selectedDate}.
-          </div>
-        )}
-
         {/* 1. NETWORK 5 CORE KPI AGGREGATES BANNER */}
         <div className="grid grid-cols-2 gap-3.5 sm:grid-cols-3 lg:grid-cols-5">
           <GlassCard className="p-4 border-primary/20">

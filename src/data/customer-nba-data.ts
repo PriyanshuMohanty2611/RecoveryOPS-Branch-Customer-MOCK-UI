@@ -22,6 +22,7 @@ export interface CustomerData {
   repaymentType: "Full Repayment" | "Partial Repayment" | "Pending Repayment";
   daysToRepay: number; // turnaround time customer takes to repay
   pays: number; // repayments count
+  paymentContactAttempts?: number | null; // approved Payment Model contact attempts in the last 30 days
   last: number; // days since last payment
   rsp: string; // optimal response window
   open: number; // template open rate %
@@ -47,8 +48,10 @@ export const CUSTOMERS: CustomerData[] = raw.split("|").map((r, i) => {
   // Daniel Lee (C002), Hannah Brooks (C015), Tom Reyes (C016), Linda Gomez (C010) prefer Digital Mail
   // Sarah Anderson (C006), Emily Rodriguez (C004), Matthew Thomas (C011), Jason Miller (C017) prefer Field Visit
   // Michael Carter (C001), Amanda Thompson (C008), James Wilson (C007) prefer Direct Phone
-  const isMailPreferred = id === "C002" || id === "C015" || id === "C016" || id === "C010" || id === "C003";
-  const isFieldPreferred = (dpd >= 35 && (id === "C006" || id === "C004" || id === "C011")) || id === "C017";
+  const isMailPreferred =
+    id === "C002" || id === "C015" || id === "C016" || id === "C010" || id === "C003";
+  const isFieldPreferred =
+    (dpd >= 35 && (id === "C006" || id === "C004" || id === "C011")) || id === "C017";
 
   const phScore = isFieldPreferred ? 55 : isMailPreferred ? 45 : 78;
   const emScore = isMailPreferred ? 84 : 42;
@@ -118,8 +121,14 @@ export const CUSTOMERS: CustomerData[] = raw.split("|").map((r, i) => {
   } else {
     const phAtt = Math.max(1, Math.round(touches * 0.6));
     const emAtt = Math.max(1, touches - phAtt);
-    methodAttempts["Phone calls"] = { attempts: phAtt, success: Math.min(phAtt, Math.round(phAtt * 0.6)) };
-    methodAttempts["Mails"] = { attempts: emAtt, success: Math.min(emAtt, Math.round(emAtt * 0.4)) };
+    methodAttempts["Phone calls"] = {
+      attempts: phAtt,
+      success: Math.min(phAtt, Math.round(phAtt * 0.6)),
+    };
+    methodAttempts["Mails"] = {
+      attempts: emAtt,
+      success: Math.min(emAtt, Math.round(emAtt * 0.4)),
+    };
   }
 
   // Repayment behavior analysis
@@ -187,8 +196,8 @@ export const BRANCH_METADATA: Record<
   }
 > = {
   "101": {
-    name: "North Central Hub",
-    region: "Northern Division",
+    name: "Main Street",
+    region: "Northeast",
     manager: "A. Sterling",
     gradient: "from-blue-600 via-indigo-600 to-violet-700",
     badgeBg: "bg-blue-500/15 text-blue-600 dark:text-blue-400 border-blue-500/30",
@@ -196,8 +205,8 @@ export const BRANCH_METADATA: Record<
     accentColor: "#3b82f6",
   },
   "104": {
-    name: "Downtown Metro",
-    region: "Central City",
+    name: "Oakwood",
+    region: "Midwest",
     manager: "M. Davis",
     gradient: "from-violet-600 via-fuchsia-600 to-pink-600",
     badgeBg: "bg-fuchsia-500/15 text-fuchsia-600 dark:text-fuchsia-400 border-fuchsia-500/30",
@@ -205,8 +214,8 @@ export const BRANCH_METADATA: Record<
     accentColor: "#d946ef",
   },
   "105": {
-    name: "West Valley Center",
-    region: "Western District",
+    name: "Pine Valley",
+    region: "Southeast",
     manager: "R. Chen",
     gradient: "from-emerald-600 via-teal-600 to-cyan-600",
     badgeBg: "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border-emerald-500/30",
@@ -214,8 +223,8 @@ export const BRANCH_METADATA: Record<
     accentColor: "#10b981",
   },
   "106": {
-    name: "Eastside Regional",
-    region: "Eastern Sector",
+    name: "Riverfront",
+    region: "Southwest",
     manager: "E. Morales",
     gradient: "from-rose-600 via-red-600 to-orange-600",
     badgeBg: "bg-rose-500/15 text-rose-600 dark:text-rose-400 border-rose-500/30",
@@ -223,8 +232,8 @@ export const BRANCH_METADATA: Record<
     accentColor: "#f43f5e",
   },
   "201": {
-    name: "South Corridor",
-    region: "Southern Territory",
+    name: "Hilltop",
+    region: "West",
     manager: "J. Vance",
     gradient: "from-amber-600 via-orange-600 to-red-600",
     badgeBg: "bg-amber-500/15 text-amber-600 dark:text-amber-400 border-amber-500/30",
@@ -232,13 +241,22 @@ export const BRANCH_METADATA: Record<
     accentColor: "#f59e0b",
   },
   "202": {
-    name: "Airport Gateway",
-    region: "Metro Transit Hub",
+    name: "Lakeside",
+    region: "Northwest",
     manager: "K. Patel",
     gradient: "from-cyan-600 via-sky-600 to-indigo-600",
     badgeBg: "bg-cyan-500/15 text-cyan-600 dark:text-cyan-400 border-cyan-500/30",
     borderGlow: "hover:border-cyan-500/60 hover:shadow-cyan-500/15",
     accentColor: "#06b6d4",
+  },
+  "203": {
+    name: "Downtown",
+    region: "Northeast",
+    manager: "D. Miller",
+    gradient: "from-purple-600 via-indigo-600 to-blue-600",
+    badgeBg: "bg-purple-500/15 text-purple-600 dark:text-purple-400 border-purple-500/30",
+    borderGlow: "hover:border-purple-500/60 hover:shadow-purple-500/15",
+    accentColor: "#8b5cf6",
   },
 };
 
@@ -265,4 +283,3 @@ export function setStoredCustomerBranch(code: string | null) {
     /* ignore */
   }
 }
-

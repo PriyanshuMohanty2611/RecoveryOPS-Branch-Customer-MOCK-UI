@@ -188,4 +188,3 @@ export interface OverallBranchAIResponse {
   meta: ApiMeta;
   ai: AIInsightMeta;
 }
-

@@ -258,9 +258,24 @@ const MONTH_THEMES: Record<
 function getMonthTheme(end: string, idx: number) {
   if (MONTH_THEMES[end]) return MONTH_THEMES[end];
   const defaults = [
-    { bg: "bg-slate-300 dark:bg-slate-700", border: "border-slate-400/60", text: "text-slate-600", dot: "bg-slate-400" },
-    { bg: "bg-sky-400 dark:bg-sky-600", border: "border-sky-500/60", text: "text-sky-600", dot: "bg-sky-400" },
-    { bg: "bg-indigo-400 dark:bg-indigo-600", border: "border-indigo-500/60", text: "text-indigo-600", dot: "bg-indigo-400" },
+    {
+      bg: "bg-slate-300 dark:bg-slate-700",
+      border: "border-slate-400/60",
+      text: "text-slate-600",
+      dot: "bg-slate-400",
+    },
+    {
+      bg: "bg-sky-400 dark:bg-sky-600",
+      border: "border-sky-500/60",
+      text: "text-sky-600",
+      dot: "bg-sky-400",
+    },
+    {
+      bg: "bg-indigo-400 dark:bg-indigo-600",
+      border: "border-indigo-500/60",
+      text: "text-indigo-600",
+      dot: "bg-indigo-400",
+    },
     { bg: "bg-primary", border: "border-primary", text: "text-primary", dot: "bg-primary" },
   ];
   return defaults[idx % defaults.length]!;
@@ -276,8 +291,7 @@ function BranchPerformanceContent({ branch }: { branch: BranchSummary }) {
   // Fetch performance snapshot data for the completed month pool (up to 4 completed months)
   const perfQuery = useQuery({
     queryKey: ["branch-performance", branch.id, selectedDate, 4],
-    queryFn: () =>
-      api.getBranchPerformance(branch.id, selectedDate, undefined, undefined, 4),
+    queryFn: () => api.getBranchPerformance(branch.id, selectedDate, undefined, undefined, 4),
     staleTime: 60_000,
     retry: 1,
   });
@@ -361,8 +375,7 @@ function BranchPerformanceContent({ branch }: { branch: BranchSummary }) {
         const val = findValue(period.end);
         const formatted = val == null ? "—" : `${Math.round(val * 10) / 10}${kpi.unit}`;
         const shortMonth = period.label.split(" ")[0]?.slice(0, 3) ?? period.label;
-        const heightPct =
-          val == null ? 4 : Math.min(100, Math.max(6, (val / kpi.maxScale) * 100));
+        const heightPct = val == null ? 4 : Math.min(100, Math.max(6, (val / kpi.maxScale) * 100));
         return {
           period,
           idx,
@@ -430,7 +443,8 @@ function BranchPerformanceContent({ branch }: { branch: BranchSummary }) {
   const totalPortfolioAccounts = useMemo(() => {
     return dpdEntries.reduce((sum, d) => sum + (d.accountCount ?? 0), 0);
   }, [dpdEntries]);
-  const activeAccountCount = totalPortfolioAccounts > 0 ? totalPortfolioAccounts : (currentPieItem.accountCount ?? 0);
+  const activeAccountCount =
+    totalPortfolioAccounts > 0 ? totalPortfolioAccounts : (currentPieItem.accountCount ?? 0);
 
   const isLoading = perfQuery.isLoading || networkQuery.isLoading;
   const isError = perfQuery.isError || networkQuery.isError;
@@ -611,7 +625,8 @@ function BranchPerformanceContent({ branch }: { branch: BranchSummary }) {
                   Core KPI Performance Comparison
                 </h2>
                 <p className="text-xs text-muted-foreground mt-0.5">
-                  Side-by-side progression across the 5 primary operational dimensions for {branch.name}
+                  Side-by-side progression across the 5 primary operational dimensions for{" "}
+                  {branch.name}
                 </p>
               </div>
 
@@ -633,9 +648,7 @@ function BranchPerformanceContent({ branch }: { branch: BranchSummary }) {
                   </button>
                   <button
                     type="button"
-                    onClick={() =>
-                      setSelectedMonthEnds(comparisonPeriods.map((p) => p.end))
-                    }
+                    onClick={() => setSelectedMonthEnds(comparisonPeriods.map((p) => p.end))}
                     className={`rounded-md px-2.5 py-1 font-semibold transition cursor-pointer ${
                       selectedMonthEnds.length === comparisonPeriods.length &&
                       comparisonPeriods.length > 0
@@ -723,9 +736,7 @@ function BranchPerformanceContent({ branch }: { branch: BranchSummary }) {
                       {/* Multi-Bars Container */}
                       <div
                         className={`relative z-10 flex h-full items-end justify-center ${
-                          effectivePeriods.length <= 2
-                            ? "gap-2 sm:gap-3"
-                            : "gap-1 sm:gap-1.5"
+                          effectivePeriods.length <= 2 ? "gap-2 sm:gap-3" : "gap-1 sm:gap-1.5"
                         }`}
                       >
                         {kpi.periodValues.map((p, pIdx) => {

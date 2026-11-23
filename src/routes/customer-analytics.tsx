@@ -1,22 +1,20 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useMemo } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { AppShell } from "@/components/app-shell";
-import {
-  Building2,
-  Users,
-  ArrowRight,
-  ListChecks,
-} from "lucide-react";
+import { Building2, Users, ArrowRight, ListChecks } from "lucide-react";
 import { AnimatedKpi } from "@/components/ui/animated-kpi";
 import { InfoTooltip } from "@/components/ui/info-tooltip";
 import { useScrollInView } from "@/hooks/use-scroll-in-view";
 import {
-  CUSTOMERS,
   BRANCH_METADATA,
   ALL_BRANCH_CODES,
   setStoredCustomerBranch,
+  CUSTOMERS,
   type CustomerData,
 } from "@/data/customer-nba-data";
+import { api } from "@/lib/api";
+import { useDate } from "@/hooks/date-context";
 
 export const Route = createFileRoute("/customer-analytics")({
   head: () => ({
@@ -24,10 +22,41 @@ export const Route = createFileRoute("/customer-analytics")({
       { title: "Customer Insights — RecoveryOps" },
       {
         name: "description",
-        content: "Branch-level customer delinquency queues, next best actions, and priority worklists.",
+        content:
+          "Branch-level customer delinquency queues, next best actions, and priority worklists.",
       },
     ],
   }),
+  errorComponent: () => (
+    <div className="flex min-h-[60vh] flex-col items-center justify-center p-8 text-center space-y-4">
+      <div className="size-12 rounded-2xl bg-primary/10 text-primary flex items-center justify-center">
+        <Building2 className="size-6" />
+      </div>
+      <h2 className="text-xl font-bold text-foreground">
+        Customer Insights temporarily unavailable
+      </h2>
+      <p className="max-w-md text-sm text-muted-foreground">
+        We encountered an issue loading branch queues. You can retry or browse the full priority
+        worklist directly.
+      </p>
+      <div className="flex items-center justify-center gap-3 pt-2">
+        <Link
+          to="/worklist"
+          search={{ branch: undefined, segment: undefined }}
+          className="inline-flex items-center gap-2 rounded-xl bg-primary px-4 py-2 text-xs font-bold text-primary-foreground hover:bg-primary/90"
+        >
+          <ListChecks className="size-4" /> Open Priority Worklist
+        </Link>
+        <button
+          type="button"
+          onClick={() => window.location.reload()}
+          className="rounded-xl border border-border px-4 py-2 text-xs font-semibold text-foreground hover:bg-muted"
+        >
+          Refresh Page
+        </button>
+      </div>
+    </div>
+  ),
   component: CustomerBranchOverview,
 });
 
@@ -189,7 +218,18 @@ function BranchCard({
 
 function CustomerBranchOverview() {
   const navigate = useNavigate();
-  const customers = CUSTOMERS;
+  const { selectedDate } = useDate();
+  const branchesQuery = useQuery({
+    queryKey: ["customer-branches", selectedDate],
+    queryFn: () => api.getCustomerBranches(selectedDate),
+    staleTime: 30_000,
+  });
+
+  const branchData = Array.isArray(branchesQuery.data?.data) ? branchesQuery.data.data : [];
+  const liveCustomers = branchData.flatMap((branch) =>
+    Array.isArray(branch?.accounts) ? branch.accounts : [],
+  );
+  const customers = liveCustomers.length > 0 ? liveCustomers : CUSTOMERS;
 
   // Aggregate stats per branch
   const branchAggregates: BranchAggregate[] = useMemo(() => {
@@ -204,23 +244,35 @@ function CustomerBranchOverview() {
         accentColor: "#6366f1",
       };
 
-      const bCustomers = customers.filter((c) => c.br === code);
-      const totalExp = bCustomers.reduce((sum, c) => sum + c.exp, 0);
+      const serverBranch = branchData.find((b) => String(b.code) === String(code));
+      const bCustomers = customers.filter((c) => String(c.br) === String(code));
+      const totalExp =
+        Number(
+          serverBranch
+            ? serverBranch.dpdAmount
+            : bCustomers.reduce((sum, c) => sum + (c.exp || 0), 0),
+        ) || 0;
+
       const avgCov = bCustomers.length
-        ? Math.round(bCustomers.reduce((sum, c) => sum + c.cov, 0) / bCustomers.length)
+        ? Math.round(bCustomers.reduce((sum, c) => sum + (c.cov || 0), 0) / bCustomers.length)
         : 0;
 
       // Agent outreach: how many customers reached and done
-      const reachedCount = bCustomers.filter((c) => c.touches > 0).length;
+      const reachedCount = bCustomers.filter((c) => (c.touches || 0) > 0).length;
       const outreachPct = bCustomers.length
         ? Math.round((reachedCount / bCustomers.length) * 100)
         : 0;
 
       // Recovered amount and attainment %
-      const recoveredAmt = bCustomers.reduce(
-        (sum, c) => sum + Math.round((c.exp * c.cov) / 100),
-        0
-      );
+      const recoveredAmt =
+        Number(
+          serverBranch
+            ? serverBranch.recoveredAmount
+            : bCustomers.reduce(
+                (sum, c) => sum + Math.round(((c.exp || 0) * (c.cov || 0)) / 100),
+                0,
+              ),
+        ) || 0;
       const attainmentPct = totalExp > 0 ? Math.round((recoveredAmt / totalExp) * 100) : 0;
 
       return {
@@ -235,7 +287,22 @@ function CustomerBranchOverview() {
         attainmentPct,
       };
     });
-  }, [customers]);
+  }, [branchData, customers]);
+
+  if (branchesQuery.isLoading && customers.length === 0) {
+    return (
+      <AppShell title="Customer Insights" section="Customer Level">
+        <div className="p-8 text-sm text-muted-foreground">Loading customer branches...</div>
+      </AppShell>
+    );
+  }
+  if (branchesQuery.isError && customers.length === 0) {
+    return (
+      <AppShell title="Customer Insights" section="Customer Level">
+        <div className="p-8 text-sm text-destructive">Unable to load customer branches.</div>
+      </AppShell>
+    );
+  }
 
   return (
     <AppShell
@@ -246,6 +313,7 @@ function CustomerBranchOverview() {
         <div className="flex items-center gap-3">
           <Link
             to="/worklist"
+            search={{ branch: undefined, segment: undefined }}
             className="inline-flex items-center gap-1.5 rounded-xl bg-primary px-3.5 py-1.5 text-xs font-bold text-primary-foreground hover:bg-primary/90 transition shadow-xs"
           >
             <ListChecks className="size-3.5" /> Full Priority Worklist
@@ -259,22 +327,25 @@ function CustomerBranchOverview() {
           <div className="space-y-1">
             <div className="flex items-center gap-2">
               <span className="inline-flex items-center gap-1.5 rounded-full bg-primary/10 px-2.5 py-0.5 text-xs font-bold text-primary border border-primary/20">
-                <Building2 className="size-3.5" /> 6 Recovery Hubs
+                <Building2 className="size-3.5" /> {ALL_BRANCH_CODES.length} Recovery Hubs
               </span>
             </div>
             <h2 className="text-xl sm:text-2xl font-black tracking-tight text-foreground">
               Select Branch Priority Worklist
             </h2>
             <p className="text-xs sm:text-sm text-muted-foreground">
-              Click any branch to inspect delinquent borrowers, active outreach cadences, and predictive recovery models.
+              Click any branch to inspect delinquent borrowers, active outreach cadences, and
+              predictive recovery models.
             </p>
           </div>
 
           <Link
             to="/worklist"
+            search={{ branch: undefined, segment: undefined }}
             className="inline-flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2 text-xs font-bold text-primary-foreground hover:bg-primary/90 transition shadow-xs shrink-0 self-start sm:self-center"
           >
-            <ListChecks className="size-3.5" /> Open Full Worklist <ArrowRight className="size-3.5 ml-0.5" />
+            <ListChecks className="size-3.5" /> Open Full Worklist{" "}
+            <ArrowRight className="size-3.5 ml-0.5" />
           </Link>
         </div>
 
@@ -287,7 +358,7 @@ function CustomerBranchOverview() {
               index={idx}
               onSelect={() => {
                 setStoredCustomerBranch(b.code);
-                navigate({ to: "/worklist", search: { branch: b.code } });
+                navigate({ to: "/worklist", search: { branch: b.code, segment: undefined } });
               }}
             />
           ))}
